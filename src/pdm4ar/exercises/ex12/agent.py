@@ -12,6 +12,12 @@ from dg_commons.sim.models.vehicle import VehicleCommands
 from dg_commons.sim.models.vehicle_structures import VehicleGeometry
 from dg_commons.sim.models.vehicle_utils import VehicleParameters
 
+from .motion_primitives import MotionPrimitivesGenerator, MPGParam
+from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
+from decimal import Decimal
+from matplotlib import pyplot as plt
+import numpy as np
+
 
 @dataclass(frozen=True)
 class Pdm4arAgentParams:
@@ -28,6 +34,10 @@ class Pdm4arAgent(Agent):
     sg: VehicleGeometry
     sp: VehicleParameters
 
+    mpg_params: MPGParam
+    mpg: MotionPrimitivesGenerator
+    dyn: BicycleDynamics
+
     def __init__(self):
         # feel free to remove/modify  the following
         self.params = Pdm4arAgentParams()
@@ -40,6 +50,9 @@ class Pdm4arAgent(Agent):
         self.goal = init_obs.goal
         self.sg = init_obs.model_geometry
         self.sp = init_obs.model_params
+        self.dyn = BicycleDynamics(self.sg, self.sp)
+        self.mpg_params = MPGParam.from_vehicle_parameters(dt=Decimal(0.01), n_steps=10, n_vel=5, n_steer=5)
+        self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -51,8 +64,31 @@ class Pdm4arAgent(Agent):
         :return:
         """
 
+        # Update linspace of velocities and actions
+        current_ego_state = sim_obs.players[self.name].state
+        tr, cmds = self.generate_Motion_Primitives(current_ego_state, True)
+
         # todo implement here some better planning
         rnd_acc = random.random() * self.params.param1
         rnd_ddelta = (random.random() - 0.5) * self.params.param1
 
         return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
+
+    def generate_Motion_Primitives(self, current_state: VehicleState, verbose=False):
+        """
+        This method is used to generate motion primitives for the current state of the ego vehicle
+        """
+        # Update linspace of velocities and actions
+        # Generate trajector
+        tr, cmds = self.mpg.generate(current_state)
+
+        # Plot trajectories
+        if verbose:
+            plt.figure()
+            for t in tr:
+                x = np.array([v.x for v in t.values])
+                y = np.array([v.y for v in t.values])
+                plt.plot(x, y)
+            plt.savefig("trajectories.png")
+
+        return tr, cmds
