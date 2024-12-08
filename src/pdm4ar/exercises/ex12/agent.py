@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from commonroad.scenario.lanelet import LaneletNetwork
-from dg_commons import PlayerName
+from dg_commons import PlayerName, SE2Transform
 from dg_commons.sim.goals import PlanningGoal
 from dg_commons.sim import SimObservations, InitSimObservations
 from dg_commons.sim.agents import Agent
@@ -14,9 +14,13 @@ from dg_commons.sim.models.vehicle_utils import VehicleParameters
 
 from .motion_primitives import MotionPrimitivesGenerator, MPGParam
 from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
+from dg_commons.maps.lanes import DgLanelet
+from dg_commons.seq import DgSampledSequence
+from dg_commons.eval.comfort import get_acc_rms
 from decimal import Decimal
 from matplotlib import pyplot as plt
 import numpy as np
+import shapely
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,11 @@ class Pdm4arAgent(Agent):
         self.dyn = BicycleDynamics(self.sg, self.sp)
         self.mpg_params = MPGParam.from_vehicle_parameters(dt=Decimal(0.01), n_steps=10, n_vel=5, n_steer=5)
         self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
+        self.lanelet_network = init_obs.dg_scenario.lanelet_network
+        self.boundary_obstacles = [
+            obstacle.shape.envelope.buffer(-init_obs.dg_scenario.road_boundaries_buffer)
+            for obstacle in init_obs.dg_scenario.static_obstacles
+        ]
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -67,6 +76,7 @@ class Pdm4arAgent(Agent):
         # Update linspace of velocities and actions
         current_ego_state = sim_obs.players[self.name].state
         tr, cmds = self.generate_Motion_Primitives(current_ego_state, True)
+        _, _ = self.calculate_cost(current_ego_state, list(cmds)[0], 0)
 
         # todo implement here some better planning
         rnd_acc = random.random() * self.params.param1
@@ -92,3 +102,80 @@ class Pdm4arAgent(Agent):
             plt.savefig("trajectories.png")
 
         return tr, cmds
+
+    def calculate_cost(self, future_state: VehicleState, action: VehicleCommands, time: float):
+        # pass
+        score = 100
+        vehicle_shapely = self.get_vehicle_shapely(future_state)
+
+        # 0. Check whether future state is still within playground
+        inside_playground = True
+        # for obstacle in self.boundary_obstacles:
+        #     if vehicle_shapely.intersects(obstacle):
+        #         return float("inf"), False, False
+
+        # 1. distance and heading wrt goal lane and whether it is a goal node
+        inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)
+
+        state_se2transform = SE2Transform([future_state.x, future_state.y], future_state.psi)
+
+        # lanelet_id = self.lanelet_network.find_lanelet_by_position([self.goal.ref_lane.control_points[1].q.p])[0][0]
+        # lanelet = self.lanelet_network.find_lanelet_by_id(lanelet_id=lanelet_id)
+        lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
+        lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
+        heading_delta = lane_pose.relative_heading
+
+        if not inside_goal_lane:
+            is_goal_state = False
+            distance_to_goal_lane = lane_pose.distance_from_center
+            score *= 0.7
+            score -= 5 * distance_to_goal_lane
+
+            if np.abs(heading_delta) >= 0.1:
+                heading_penalty = (np.abs(heading_delta) - 0.1) * 10.0
+                heading_penalty = np.clip(heading_penalty, 0.0, 1.0)
+                score -= 5.0 * heading_penalty
+        else:
+            if np.abs(heading_delta) < 0.1:
+                is_goal_state = True
+            else:
+                is_goal_state = False
+                heading_penalty = (np.abs(heading_delta) - 0.1) * 10.0
+                heading_penalty = np.clip(heading_penalty, 0.0, 1.0)
+                score -= 5.0 * heading_penalty
+
+        # 2. lane changing time
+        lane_changing_penalty = (time - 5.0) / 5.0
+        lane_changing_penalty = np.clip(lane_changing_penalty, 0.0, 1.0)
+        score -= 10.0 * lane_changing_penalty
+
+        # 3. time to collision
+        # TODO
+
+        # 4. discomfort level of the action
+        # ts = tuple(np.linspace(0, time, 10))
+        # action_sequence = DgSampledSequence[VehicleCommands](timestamps=[0, 0.1], values=[action])
+        # discomfort = get_acc_rms(action_sequence)
+        # discomfort_penalty = (discomfort - 0.6) * 3.0
+        # discomfort_penalty = np.clip(discomfort_penalty, 0.0, 1.0)
+        # score -= 5.0 * discomfort_penalty
+
+        # 5. vehicle speed
+        velocity_difference = np.maximum(future_state.vx - 25.0, 5.0 - future_state.vx)
+        velocity_penalty = velocity_difference / 5.0
+        velocity_penalty = np.clip(velocity_penalty, 0.0, 1.0)
+        score -= 5.0 * velocity_penalty
+
+        return -score, is_goal_state, inside_playground
+
+    def get_vehicle_shapely(self, state: VehicleState):
+        cog = np.array([state.x, state.y])
+        R = np.array([[np.cos(state.psi), -np.sin(state.psi)], [np.sin(state.psi), np.cos(state.psi)]])
+        front_left = cog + R @ np.array([self.sg.lf, self.sg.w_half]).T
+        front_right = cog + R @ np.array([self.sg.lf, -self.sg.w_half]).T
+        back_left = cog + R @ np.array([self.sg.lr, self.sg.w_half]).T
+        back_right = cog + R @ np.array([self.sg.lr, -self.sg.w_half]).T
+
+        vehicle_shapely = shapely.Polygon((tuple(front_left), tuple(front_right), tuple(back_left), tuple(back_right)))
+
+        return vehicle_shapely
