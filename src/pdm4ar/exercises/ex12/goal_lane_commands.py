@@ -16,20 +16,20 @@ from dg_commons.maps import DgLanelet, DgLanePose
 from dg_commons.sim import extract_pose_from_state
 
 
-from .agent import Pdm4arAgent
 from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
 from decimal import Decimal
 from matplotlib import pyplot as plt
 import numpy as np
 
-def goal_lane_commands(self: Pdm4arAgent, sim_obs: SimObservations) -> VehicleCommands:
+
+def goal_lane_commands(self, sim_obs: SimObservations) -> VehicleCommands:
     """This method is called by the simulator as soon as we're on the goal lane.
 
     Notes:
-    - L170-172 ex12/perf_metrics.py: Time to collision is ignored after the goal lane 
+    - L170-172 ex12/perf_metrics.py: Time to collision is ignored after the goal lane
       has been reached.
     - Lane heading has to be exact, discomfort must be minimized, do not collide.
-    -> We correct the lane heading and decelerate if any collision is imminent at the 
+    -> We correct the lane heading and decelerate if any collision is imminent at the
         cost of increased discomfort.
     """
     # Check lane heading
@@ -50,7 +50,7 @@ def goal_lane_commands(self: Pdm4arAgent, sim_obs: SimObservations) -> VehicleCo
         # next state
         # psi = psi + dt * dx * math.tan(x0.delta) / self.vg.wheelbase
         # heading = - dt * dx * math.tan(x0.delta) / self.vg.wheelbase
-        ddelta = np.arctan(- heading * self.dyn.vg.wheelbase / (0.1 * ego_state.vx))
+        ddelta = np.arctan(-heading * self.dyn.vg.wheelbase / (0.1 * ego_state.vx))
     # Decelerate if collision is imminent
     acc = 0
     time_to_collision = np.inf
@@ -58,9 +58,7 @@ def goal_lane_commands(self: Pdm4arAgent, sim_obs: SimObservations) -> VehicleCo
         if player_name == self.name:
             continue
         other_state: VehicleState = player_obs.state  # type: ignore
-        other_lanelet_ids = self.lanelet_network.find_lanelet_by_position(
-            [np.array([other_state.x, other_state.y])]
-        )
+        other_lanelet_ids = self.lanelet_network.find_lanelet_by_position([np.array([other_state.x, other_state.y])])
 
         # Check if the other player is on the same lanelet
         if self.goal_lanelet_id in other_lanelet_ids:
@@ -69,9 +67,9 @@ def goal_lane_commands(self: Pdm4arAgent, sim_obs: SimObservations) -> VehicleCo
             # compute distance between shapelies
             distance = vehicle_shapely.distance(other_shapely)
             time_to_collision = min(time_to_collision, distance / ego_state.vx)
-    
+
     if time_to_collision < 1:
         # Decelerate, TODO: more smoothly
         acc = self.sp.acc_limits[0]
-    
+
     return VehicleCommands(acc=acc, ddelta=ddelta)

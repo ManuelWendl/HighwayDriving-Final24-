@@ -87,16 +87,22 @@ class MotionPrimitivesGenerator(TrajGenerator):
         return motion_primitives, commands
 
     def generate_samples(self, x0) -> tuple[List, List]:
-        v_samples = np.linspace(
-            max(x0.vx + self.vehicle_param.acc_limits[0] * float(self.param.dt), 5),
-            min(x0.vx + self.vehicle_param.acc_limits[1] * float(self.param.dt), self.vehicle_param.vx_limits[1]),
-            self.param.velocity,
-        )
-        steer_samples = np.linspace(
-            x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt),
-            x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt),
-            self.param.steering,
-        )
+        if self.param.velocity == 1:
+            v_samples = [x0.vx]
+        else:
+            v_samples = np.linspace(
+                max(x0.vx + self.vehicle_param.acc_limits[0] * float(self.param.dt), 5),
+                min(x0.vx + self.vehicle_param.acc_limits[1] * float(self.param.dt), self.vehicle_param.vx_limits[1]),
+                self.param.velocity,
+            )
+        if self.param.steering == 1:
+            steer_samples = [x0.delta]
+        else:
+            steer_samples = np.linspace(
+                x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt),
+                x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt),
+                self.param.steering,
+            )
         return v_samples, steer_samples
 
     def check_input_constraints(self, v_start, v_end, sa_start, sa_end) -> tuple[bool, float, float]:

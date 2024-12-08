@@ -35,8 +35,8 @@ X = TypeVar("X")
 @dataclass(frozen=True)
 class Pdm4arAgentParams:
     ctrl_timestep: float = 0.1
-    ctrl_frequncy: float = 8
-    n_velocity: int = 3
+    ctrl_frequency: float = 5
+    n_velocity: int = 1
     n_steering: int = 3
     delta_angle_threshold: float = np.pi / 4
     max_tree_dpeth: int = 10
@@ -70,7 +70,7 @@ class Pdm4arAgent(Agent):
         self.sp = init_obs.model_params  # type: ignore
         self.dyn = BicycleDynamics(self.sg, self.sp)
         self.mpg_params = MPGParam.from_vehicle_parameters(
-            dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequncy),
+            dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequency),
             n_steps=1,
             n_vel=self.params.n_velocity,
             n_steer=self.params.n_steering,
@@ -102,10 +102,12 @@ class Pdm4arAgent(Agent):
             return goal_lane_commands(self, sim_obs)
         else:
             # This is taken from L162 ex12/perf_metrics.py
-            if desired_lane_reached(self.lanelet_network, self.goal, sim_obs.players[self.name].state, pos_tol=0.8, heading_tol=0.08):
+            if desired_lane_reached(
+                self.lanelet_network, self.goal, sim_obs.players[self.name].state, pos_tol=0.8, heading_tol=0.08
+            ):
                 self.goal_reached = True
                 return goal_lane_commands(self, sim_obs)
-            
+
         # START lane change planning
         if self.graph is None:
             self.generate_graph(sim_obs)
@@ -124,19 +126,21 @@ class Pdm4arAgent(Agent):
         It generates the weighted graph of the motion primitives
         """
 
-        def recursive_adding(state, graph, depth=1):
-            trs, cmds = self.mpg.generate(state)
-            u = tree_node(state, False)
-            for tr, cmd in zip(trs, cmds):
-                cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
-                    tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs
-                )
+        def recursive_adding(u, graph, depth=1):
+            if not u.is_goal:
+                trs, cmds = self.mpg.generate(u.state)
+                for tr, cmd in zip(trs, cmds):
+                    cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
+                        tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs
+                    )
 
-                if inside_playground and not heading_delta_over_threshold:
-                    v = tree_node(tr.values[-1], is_goal)
-                    graph.add_edge(u, v, cost, cmd)
-                    if depth < self.params.max_tree_dpeth:
-                        recursive_adding(tr.values[-1], graph, depth + 1)
+                    if inside_playground and not heading_delta_over_threshold:
+                        v = tree_node(tr.values[-1], is_goal)
+                        graph.add_edge(u, v, cost, cmd)
+                        if depth < self.params.max_tree_dpeth:
+                            recursive_adding(v, graph, depth + 1)
+            else:
+                print("Goal node reached")
 
         self.graph = WeightedGraph(
             adj_list={},
@@ -145,7 +149,8 @@ class Pdm4arAgent(Agent):
         )
 
         init_state = sim_obs.players[self.name].state
-        recursive_adding(init_state, self.graph)
+        init_node = tree_node(state=init_state, is_goal=False)
+        recursive_adding(init_node, self.graph)
 
     def calculate_cost(
         self, future_state: VehicleState, action: VehicleCommands, time: float, sim_obs: SimObservations
@@ -219,8 +224,8 @@ class Pdm4arAgent(Agent):
         # 4. discomfort level of the action
         # TODO: Would it be better here to take into account the previous action to evaluate the change in acc and ddelta?
         N_SAMPLES_DISCOMFORT = 10
-        # ts = tuple(np.linspace(0, self.params.ctrl_frequency * self.params.timesteps, N_SAMPLES_DISCOMFORT))
-        ts = tuple(np.linspace(0, 0.5, N_SAMPLES_DISCOMFORT))
+        ts = tuple(np.linspace(0, self.params.ctrl_frequency * self.params.ctrl_timestep, N_SAMPLES_DISCOMFORT))
+        # ts = tuple(np.linspace(0, 0.5, N_SAMPLES_DISCOMFORT))
         # acc = [action.acc] * N_SAMPLES_DISCOMFORT
         # ddelta = [action.ddelta] * N_SAMPLES_DISCOMFORT
         # cmds_list = [VehicleCommands(acc_i, ddelta_i) for acc_i, ddelta_i in zip(acc, ddelta)]

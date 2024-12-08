@@ -71,9 +71,12 @@ class WeightedGraph:
 
     def draw_graph(self, lanes):
         print("Drawing graph")
-        plt.figure(figsize=(50, 10))
+        plt.figure(figsize=(100, 50))
         for u, v in self.weights.keys():
-            plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-")
+            if v.is_goal:
+                plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-", "LineWidth", 0.5)
+            else:
+                plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ko-", "LineWidth", 0.5)
         for lane in lanes:
             plt.plot(*lane.exterior.xy)
         plt.axis("equal")
