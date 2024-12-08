@@ -123,15 +123,15 @@ class Pdm4arAgent(Agent):
         recursive_adding(init_state, self.graph)
 
     def calculate_cost(self, future_state: VehicleState, action: VehicleCommands, time: float):
-        # pass
+
         score = 100
         vehicle_shapely = self.get_vehicle_shapely(future_state)
-
+        vehicle_centroid = shapely.Point((future_state.x, future_state.y))
         # 0. Check whether future state is still within playground
         inside_playground = True
-        # for obstacle in self.boundary_obstacles:
-        #     if vehicle_shapely.intersects(obstacle):
-        #         return float("inf"), False, False
+        for obstacle in self.boundary_obstacles:
+            if shapely.within(vehicle_centroid, obstacle):
+                return float("inf"), False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
         inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)
@@ -143,6 +143,11 @@ class Pdm4arAgent(Agent):
         lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
         heading_delta = lane_pose.relative_heading
+
+        if np.abs(heading_delta) > np.pi / 4:
+            heading_delta_over_threshold = True
+        else:
+            heading_delta_over_threshold = False
 
         if not inside_goal_lane:
             is_goal_state = False
@@ -185,7 +190,7 @@ class Pdm4arAgent(Agent):
         velocity_penalty = np.clip(velocity_penalty, 0.0, 1.0)
         score -= 5.0 * velocity_penalty
 
-        return -score, is_goal_state, inside_playground
+        return -score, is_goal_state, inside_playground, heading_delta_over_threshold
 
     def get_vehicle_shapely(self, state: VehicleState):
         cog = np.array([state.x, state.y])
