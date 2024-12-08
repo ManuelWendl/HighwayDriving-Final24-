@@ -4,7 +4,7 @@ from typing import Sequence
 
 from commonroad.scenario.lanelet import LaneletNetwork
 from dg_commons import PlayerName, SE2Transform
-from dg_commons.sim.goals import PlanningGoal
+from dg_commons.sim.goals import PlanningGoal, RefLaneGoal
 from dg_commons.sim import SimObservations, InitSimObservations
 from dg_commons.sim.agents import Agent
 from dg_commons.sim.models.obstacles import StaticObstacle
@@ -60,13 +60,13 @@ class Pdm4arAgent(Agent):
         """This method is called by the simulator only at the beginning of each simulation.
         Do not modify the signature of this method."""
         self.name = init_obs.my_name
-        self.goal = init_obs.goal
-        self.sg = init_obs.model_geometry
-        self.sp = init_obs.model_params
+        self.goal: RefLaneGoal = init_obs.goal  # type: ignore
+        self.sg = init_obs.model_geometry  # type: ignore
+        self.sp = init_obs.model_params  # type: ignore
         self.dyn = BicycleDynamics(self.sg, self.sp)
         self.mpg_params = MPGParam.from_vehicle_parameters(dt=Decimal(0.5), n_steps=1, n_vel=3, n_steer=3)
         self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
-        self.lanelet_network = init_obs.dg_scenario.lanelet_network
+        self.lanelet_network: LaneletNetwork = init_obs.dg_scenario.lanelet_network  # type: ignore
         self.boundary_obstacles = [
             obstacle.shape.envelope.buffer(-init_obs.dg_scenario.road_boundaries_buffer)
             for obstacle in init_obs.dg_scenario.static_obstacles
@@ -122,7 +122,7 @@ class Pdm4arAgent(Agent):
         init_state = sim_obs.players[self.name].state
         recursive_adding(init_state, self.graph)
 
-    def calculate_cost(self, future_state: VehicleState, action: VehicleCommands, time: float):
+    def calculate_cost(self, future_state: VehicleState, action: VehicleCommands, time: float, sim_obs: SimObservations):
         # pass
         score = 100
         vehicle_shapely = self.get_vehicle_shapely(future_state)
@@ -138,7 +138,7 @@ class Pdm4arAgent(Agent):
 
         state_se2transform = SE2Transform([future_state.x, future_state.y], future_state.psi)
 
-        # lanelet_id = self.lanelet_network.find_lanelet_by_position([self.goal.ref_lane.control_points[1].q.p])[0][0]
+        lanelet_id = self.lanelet_network.find_lanelet_by_position([self.goal.ref_lane.control_points[1].q.p])[0][0]
         # lanelet = self.lanelet_network.find_lanelet_by_id(lanelet_id=lanelet_id)
         lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
@@ -169,7 +169,22 @@ class Pdm4arAgent(Agent):
         score -= 10.0 * lane_changing_penalty
 
         # 3. time to collision
-        # TODO
+        time_to_collision = np.inf
+        for player_name, player_obs in sim_obs.players.items():
+            if player_name == self.name:
+                continue
+            other_state: VehicleState = player_obs.state  # type: ignore
+            other_lanelet_ids = self.lanelet_network.find_lanelet_by_position(
+                [np.array([other_state.x, other_state.y])]
+            )
+
+            # Check if the other player is on the same lanelet
+            if lanelet_id in other_lanelet_ids:
+                other_shapely = self.get_vehicle_shapely(other_state)
+                # compute distance between shapelies
+                distance = vehicle_shapely.distance(other_shapely)
+                time_to_collision = min(time_to_collision, distance / future_state.vx)
+                
 
         # 4. discomfort level of the action
         # ts = tuple(np.linspace(0, time, 10))
