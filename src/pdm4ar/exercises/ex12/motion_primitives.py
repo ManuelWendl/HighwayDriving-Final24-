@@ -91,8 +91,11 @@ class MotionPrimitivesGenerator(TrajGenerator):
             v_samples = [x0.vx]
         else:
             v_samples = np.linspace(
-                max(x0.vx + self.vehicle_param.acc_limits[0] * float(self.param.dt), 5),
-                min(x0.vx + self.vehicle_param.acc_limits[1] * float(self.param.dt), self.vehicle_param.vx_limits[1]),
+                max(x0.vx + self.vehicle_param.acc_limits[0] * 2 / 3 * float(self.param.dt), 5),
+                min(
+                    x0.vx + self.vehicle_param.acc_limits[1] * 2 / 3 * float(self.param.dt),
+                    self.vehicle_param.vx_limits[1],
+                ),
                 self.param.velocity,
             )
         if self.param.steering == 1:
