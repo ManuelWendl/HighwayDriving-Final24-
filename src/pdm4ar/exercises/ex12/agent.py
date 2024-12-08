@@ -32,7 +32,15 @@ X = TypeVar("X")
 
 @dataclass(frozen=True)
 class Pdm4arAgentParams:
-    param1: float = 0.2
+    ctrl_timestep: float = 0.1
+    ctrl_frequncy: float = 5
+
+    n_velocity: int = 3
+    n_steering: int = 3
+
+    delta_angle_threshold: float = np.pi / 4
+
+    max_tree_dpeth: int = 3
 
 
 class Pdm4arAgent(Agent):
@@ -64,7 +72,12 @@ class Pdm4arAgent(Agent):
         self.sg = init_obs.model_geometry  # type: ignore
         self.sp = init_obs.model_params  # type: ignore
         self.dyn = BicycleDynamics(self.sg, self.sp)
-        self.mpg_params = MPGParam.from_vehicle_parameters(dt=Decimal(0.5), n_steps=1, n_vel=3, n_steer=3)
+        self.mpg_params = MPGParam.from_vehicle_parameters(
+            dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequncy),
+            n_steps=1,
+            n_vel=self.params.n_velocity,
+            n_steer=self.params.n_steering,
+        )
         self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
         self.lanelet_network: LaneletNetwork = init_obs.dg_scenario.lanelet_network  # type: ignore
         self.boundary_obstacles = [
@@ -84,7 +97,7 @@ class Pdm4arAgent(Agent):
 
         if self.graph is None:
             self.generate_graph(sim_obs)
-            self.graph.draw_graph()
+            self.graph.draw_graph(self.boundary_obstacles)
 
         # todo implement here some better planning
         rnd_acc = random.random() * self.params.param1
@@ -99,18 +112,18 @@ class Pdm4arAgent(Agent):
         It generates the weighted graph of the motion primitives
         """
 
-        max_tree_depth = 3
-
-        def recursive_adding(state, graph, depth=0):
+        def recursive_adding(state, graph, depth=1):
             trs, cmds = self.mpg.generate(state)
             u = tree_node(state, False)
             for tr, cmd in zip(trs, cmds):
-                # TODO: Calculate total time instead of single time step
-                cost, is_goal, inside_playground = self.calculate_cost(tr.values[-1], cmd, tr.timestamps[-1], sim_obs)
-                if inside_playground:
+                cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
+                    tr.values[-1], cmd, depth * float(tr.timestamps[-1])
+                )
+
+                if inside_playground and not heading_delta_over_threshold:
                     v = tree_node(tr.values[-1], is_goal)
                     graph.add_edge(u, v, cost, cmd)
-                    if depth < max_tree_depth:
+                    if depth < self.params.max_tree_dpeth:
                         recursive_adding(tr.values[-1], graph, depth + 1)
 
         self.graph = WeightedGraph(
@@ -122,7 +135,9 @@ class Pdm4arAgent(Agent):
         init_state = sim_obs.players[self.name].state
         recursive_adding(init_state, self.graph)
 
-    def calculate_cost(self, future_state: VehicleState, action: VehicleCommands, time: float, sim_obs: SimObservations):
+    def calculate_cost(
+        self, future_state: VehicleState, action: VehicleCommands, time: float, sim_obs: SimObservations
+    ):
         # pass
         score = 100
         vehicle_shapely = self.get_vehicle_shapely(future_state)
@@ -131,7 +146,7 @@ class Pdm4arAgent(Agent):
         inside_playground = True
         for obstacle in self.boundary_obstacles:
             if shapely.within(vehicle_centroid, obstacle):
-                return float("inf"), False, False
+                return float("inf"), False, False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
         inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)

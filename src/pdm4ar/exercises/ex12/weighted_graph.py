@@ -68,8 +68,10 @@ class WeightedGraph:
         self.weights[(u, v)] = weight
         self.cmds[(u, v)] = cmds
 
-    def draw_graph(self):
+    def draw_graph(self, boundary_obstacles):
         plt.figure()
         for u, v in self.weights.keys():
             plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-")
+        for obstacle in boundary_obstacles:
+            plt.plot(*obstacle.exterior.xy)
         plt.savefig("graph.png")

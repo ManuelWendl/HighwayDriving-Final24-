@@ -88,8 +88,8 @@ class MotionPrimitivesGenerator(TrajGenerator):
 
     def generate_samples(self, x0) -> tuple[List, List]:
         v_samples = np.linspace(
-            x0.vx + self.vehicle_param.acc_limits[0] * float(self.param.dt),
-            x0.vx + self.vehicle_param.acc_limits[1] * float(self.param.dt),
+            max(x0.vx + self.vehicle_param.acc_limits[0] * float(self.param.dt), 5),
+            min(x0.vx + self.vehicle_param.acc_limits[1] * float(self.param.dt), self.vehicle_param.vx_limits[1]),
             self.param.velocity,
         )
         steer_samples = np.linspace(
