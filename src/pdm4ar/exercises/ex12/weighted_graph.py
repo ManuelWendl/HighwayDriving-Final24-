@@ -7,7 +7,7 @@ from typing import List, Callable, Set, Optional
 from dg_commons.eval.comfort import get_acc_rms
 
 from dg_commons.sim.models.vehicle import VehicleState, VehicleCommands
-from sklearn import tree
+import matplotlib.pyplot as plt
 
 
 class tree_node:
@@ -56,7 +56,7 @@ class WeightedGraph:
         except KeyError:
             raise CommandNotFound(f"Cannot find comand for edge: {(u, v)}")
 
-    def add_edge(self, u: tree_node, v: tree_node, weight: float, cmds) -> None:
+    def add_edge(self, u: tree_node, v: tree_node, weight: float, cmds: VehicleCommands) -> None:
         """
         :param u: The "from" of the edge
         :param v: The "to" of the edge
@@ -67,3 +67,9 @@ class WeightedGraph:
         self.adj_list[u].add(v)
         self.weights[(u, v)] = weight
         self.cmds[(u, v)] = cmds
+
+    def draw_graph(self):
+        plt.figure()
+        for u, v in self.weights.keys():
+            plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-")
+        plt.savefig("graph.png")

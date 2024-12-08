@@ -64,7 +64,7 @@ class Pdm4arAgent(Agent):
         self.sg = init_obs.model_geometry
         self.sp = init_obs.model_params
         self.dyn = BicycleDynamics(self.sg, self.sp)
-        self.mpg_params = MPGParam.from_vehicle_parameters(dt=Decimal(0.01), n_steps=10, n_vel=5, n_steer=5)
+        self.mpg_params = MPGParam.from_vehicle_parameters(dt=Decimal(0.5), n_steps=1, n_vel=3, n_steer=3)
         self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
         self.lanelet_network = init_obs.dg_scenario.lanelet_network
         self.boundary_obstacles = [
@@ -84,11 +84,7 @@ class Pdm4arAgent(Agent):
 
         if self.graph is None:
             self.generate_graph(sim_obs)
-
-        # Update linspace of velocities and actions
-        current_ego_state = sim_obs.players[self.name].state
-        tr, cmds = self.generate_Motion_Primitives(current_ego_state, True)
-        _, _ = self.calculate_cost(current_ego_state, list(cmds)[0], 0)
+            self.graph.draw_graph()
 
         # todo implement here some better planning
         rnd_acc = random.random() * self.params.param1
@@ -96,40 +92,26 @@ class Pdm4arAgent(Agent):
 
         return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
 
-    def generate_Motion_Primitives(self, current_state: VehicleState, verbose=False):
-        """
-        This method is used to generate motion primitives for the current state of the ego vehicle
-        """
-        # Update linspace of velocities and actions
-        # Generate trajector
-        tr, cmds = self.mpg.generate(current_state)
-
-        # Plot trajectories
-        if verbose:
-            plt.figure()
-            for t in tr:
-                x = np.array([v.x for v in t.values])
-                y = np.array([v.y for v in t.values])
-                plt.plot(x, y)
-            plt.savefig("trajectories.png")
-
-        return tr, cmds
-
     def generate_graph(self, sim_obs: SimObservations):
         """
         This method is used to generate a graph from the lanelet network
-        This function is called for ego vehicle only and only once in episode initialization
+        This function is called for ego vehicle
         It generates the weighted graph of the motion primitives
         """
 
-        def recursive_adding(state, graph):
-            tr, cmds = self.generate_Motion_Primitives(state)
+        max_tree_depth = 3
+
+        def recursive_adding(state, graph, depth=0):
+            trs, cmds = self.mpg.generate(state)
             u = tree_node(state, False)
-            for t, c in zip(tr, cmds):
-                # TODO: Integrate @Antons code for the cost function here, now take constant cost = 1
-                v = tree_node(t.values[-1], False)
-                graph.add_edge(u, v, 1, c)
-                recursive_adding(t.values[-1], graph)
+            for tr, cmd in zip(trs, cmds):
+                # TODO: Calculate total time instead of single time step
+                cost, is_goal, inside_playground = self.calculate_cost(tr.values[-1], cmd, tr.timestamps[-1])
+                if inside_playground:
+                    v = tree_node(tr.values[-1], is_goal)
+                    graph.add_edge(u, v, cost, cmd)
+                    if depth < max_tree_depth:
+                        recursive_adding(tr.values[-1], graph, depth + 1)
 
         self.graph = WeightedGraph(
             adj_list={},
