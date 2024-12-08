@@ -41,7 +41,7 @@ class Pdm4arAgent(Agent):
     Feel free to add additional methods, objects and functions that help you to solve the task"""
 
     name: PlayerName
-    goal: PlanningGoal
+    goal: PlanningGoal  # type: ignore
     sg: VehicleGeometry
     sp: VehicleParameters
 
@@ -54,7 +54,7 @@ class Pdm4arAgent(Agent):
         # feel free to remove/modify  the following
         self.params = Pdm4arAgentParams()
         self.myplanner = ()
-        self.graph = None
+        self.graph: WeightedGraph = None  # type: ignore
 
     def on_episode_init(self, init_obs: InitSimObservations):
         """This method is called by the simulator only at the beginning of each simulation.
@@ -68,8 +68,8 @@ class Pdm4arAgent(Agent):
         self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
         self.lanelet_network: LaneletNetwork = init_obs.dg_scenario.lanelet_network  # type: ignore
         self.boundary_obstacles = [
-            obstacle.shape.envelope.buffer(-init_obs.dg_scenario.road_boundaries_buffer)
-            for obstacle in init_obs.dg_scenario.static_obstacles
+            obstacle.shape.envelope.buffer(-init_obs.dg_scenario.road_boundaries_buffer)  # type: ignore
+            for obstacle in init_obs.dg_scenario.static_obstacles  # type: ignore
         ]
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
@@ -106,7 +106,7 @@ class Pdm4arAgent(Agent):
             u = tree_node(state, False)
             for tr, cmd in zip(trs, cmds):
                 # TODO: Calculate total time instead of single time step
-                cost, is_goal, inside_playground = self.calculate_cost(tr.values[-1], cmd, tr.timestamps[-1])
+                cost, is_goal, inside_playground = self.calculate_cost(tr.values[-1], cmd, tr.timestamps[-1], sim_obs)
                 if inside_playground:
                     v = tree_node(tr.values[-1], is_goal)
                     graph.add_edge(u, v, cost, cmd)
@@ -126,12 +126,12 @@ class Pdm4arAgent(Agent):
         # pass
         score = 100
         vehicle_shapely = self.get_vehicle_shapely(future_state)
-
+        vehicle_centroid = shapely.Point((future_state.x, future_state.y))
         # 0. Check whether future state is still within playground
         inside_playground = True
-        # for obstacle in self.boundary_obstacles:
-        #     if vehicle_shapely.intersects(obstacle):
-        #         return float("inf"), False, False
+        for obstacle in self.boundary_obstacles:
+            if shapely.within(vehicle_centroid, obstacle):
+                return float("inf"), False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
         inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)
@@ -143,6 +143,11 @@ class Pdm4arAgent(Agent):
         lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
         heading_delta = lane_pose.relative_heading
+
+        if np.abs(heading_delta) > np.pi / 4:
+            heading_delta_over_threshold = True
+        else:
+            heading_delta_over_threshold = False
 
         if not inside_goal_lane:
             is_goal_state = False
@@ -184,7 +189,6 @@ class Pdm4arAgent(Agent):
                 # compute distance between shapelies
                 distance = vehicle_shapely.distance(other_shapely)
                 time_to_collision = min(time_to_collision, distance / future_state.vx)
-                
 
         # 4. discomfort level of the action
         # ts = tuple(np.linspace(0, time, 10))
@@ -200,7 +204,7 @@ class Pdm4arAgent(Agent):
         velocity_penalty = np.clip(velocity_penalty, 0.0, 1.0)
         score -= 5.0 * velocity_penalty
 
-        return -score, is_goal_state, inside_playground
+        return -score, is_goal_state, inside_playground, heading_delta_over_threshold
 
     def get_vehicle_shapely(self, state: VehicleState):
         cog = np.array([state.x, state.y])
