@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import product
-from typing import List, Callable, Set, Optional
+from typing import List, Callable, Set
 
 import numpy as np
 
-from dg_commons import logger, Timestamp, LinSpaceTuple
+from dg_commons import logger, Timestamp
 from dg_commons.planning.trajectory import Trajectory
 from dg_commons.planning.trajectory_generator_abc import TrajGenerator
 from dg_commons.sim.models.vehicle import VehicleState, VehicleCommands
