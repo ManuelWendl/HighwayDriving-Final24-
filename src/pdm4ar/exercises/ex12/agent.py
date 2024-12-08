@@ -160,7 +160,6 @@ class Pdm4arAgent(Agent):
             return float("inf"), False, False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
-        inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)
 
         state_se2transform = SE2Transform([future_state.x, future_state.y], future_state.psi)
 
@@ -169,6 +168,7 @@ class Pdm4arAgent(Agent):
         lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
         heading_delta = lane_pose.relative_heading
+        inside_goal_lane = lane_pose.inside
 
         if np.abs(heading_delta) > np.pi / 4:
             heading_delta_over_threshold = True
