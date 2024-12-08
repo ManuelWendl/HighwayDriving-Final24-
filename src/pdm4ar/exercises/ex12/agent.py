@@ -33,14 +33,11 @@ X = TypeVar("X")
 @dataclass(frozen=True)
 class Pdm4arAgentParams:
     ctrl_timestep: float = 0.1
-    ctrl_frequncy: float = 5
-
+    ctrl_frequncy: float = 8
     n_velocity: int = 3
     n_steering: int = 3
-
     delta_angle_threshold: float = np.pi / 4
-
-    max_tree_dpeth: int = 3
+    max_tree_dpeth: int = 10
 
 
 class Pdm4arAgent(Agent):
@@ -52,9 +49,7 @@ class Pdm4arAgent(Agent):
     goal: PlanningGoal  # type: ignore
     sg: VehicleGeometry
     sp: VehicleParameters
-
     dyn: BicycleDynamics
-
     mpg_params: MPGParam
     mpg: MotionPrimitivesGenerator
 
@@ -99,11 +94,11 @@ class Pdm4arAgent(Agent):
 
         if self.graph is None:
             self.generate_graph(sim_obs)
-            self.graph.draw_graph(self.boundary_obstacles)
+            self.graph.draw_graph(self.lanes)
 
         # todo implement here some better planning
-        rnd_acc = random.random() * self.params.param1
-        rnd_ddelta = (random.random() - 0.5) * self.params.param1
+        rnd_acc = random.random() * 0.1
+        rnd_ddelta = (random.random() - 0.5) * 0.1
 
         return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
 
@@ -119,7 +114,7 @@ class Pdm4arAgent(Agent):
             u = tree_node(state, False)
             for tr, cmd in zip(trs, cmds):
                 cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
-                    tr.values[-1], cmd, depth * float(tr.timestamps[-1])
+                    tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs
                 )
 
                 if inside_playground and not heading_delta_over_threshold:
@@ -147,7 +142,7 @@ class Pdm4arAgent(Agent):
         inside_playground = True
         lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer)
         if not shapely.within(vehicle_shapely, lanes_union):
-            return float("inf"), False, False
+            return float("inf"), False, False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
         inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)

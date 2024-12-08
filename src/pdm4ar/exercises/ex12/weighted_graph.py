@@ -7,6 +7,7 @@ from typing import List, Callable, Set, Optional
 from dg_commons.eval.comfort import get_acc_rms
 
 from dg_commons.sim.models.vehicle import VehicleState, VehicleCommands
+from matplotlib.pylab import f
 import matplotlib.pyplot as plt
 
 
@@ -68,10 +69,12 @@ class WeightedGraph:
         self.weights[(u, v)] = weight
         self.cmds[(u, v)] = cmds
 
-    def draw_graph(self, boundary_obstacles):
-        plt.figure()
+    def draw_graph(self, lanes):
+        print("Drawing graph")
+        plt.figure(figsize=(50, 10))
         for u, v in self.weights.keys():
             plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-")
-        for obstacle in boundary_obstacles:
-            plt.plot(*obstacle.exterior.xy)
+        for lane in lanes:
+            plt.plot(*lane.exterior.xy)
+        plt.axis("equal")
         plt.savefig("graph.png")
