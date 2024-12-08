@@ -81,9 +81,11 @@ class Pdm4arAgent(Agent):
         self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
         self.lanelet_network: LaneletNetwork = init_obs.dg_scenario.lanelet_network  # type: ignore
         self.boundary_obstacles = [
-            obstacle.shape.envelope.buffer(-init_obs.dg_scenario.road_boundaries_buffer)  # type: ignore
+            obstacle.shape.envelope  # type: ignore
             for obstacle in init_obs.dg_scenario.static_obstacles  # type: ignore
         ]
+        self.lanes = [lanelet_polygon.shapely_object for lanelet_polygon in self.lanelet_network.lanelet_polygons]
+        self.road_boundaries_buffer = init_obs.dg_scenario.road_boundaries_buffer
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -141,12 +143,11 @@ class Pdm4arAgent(Agent):
         # pass
         score = 100
         vehicle_shapely = self.get_vehicle_shapely(future_state)
-        vehicle_centroid = shapely.Point((future_state.x, future_state.y))
         # 0. Check whether future state is still within playground
         inside_playground = True
-        for obstacle in self.boundary_obstacles:
-            if shapely.within(vehicle_centroid, obstacle):
-                return float("inf"), False, False, False
+        lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer)
+        if not shapely.within(vehicle_shapely, lanes_union):
+            return float("inf"), False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
         inside_goal_lane = shapely.within(vehicle_shapely, self.goal.goal_polygon)
@@ -206,12 +207,19 @@ class Pdm4arAgent(Agent):
                 time_to_collision = min(time_to_collision, distance / future_state.vx)
 
         # 4. discomfort level of the action
-        # ts = tuple(np.linspace(0, time, 10))
-        # action_sequence = DgSampledSequence[VehicleCommands](timestamps=[0, 0.1], values=[action])
-        # discomfort = get_acc_rms(action_sequence)
-        # discomfort_penalty = (discomfort - 0.6) * 3.0
-        # discomfort_penalty = np.clip(discomfort_penalty, 0.0, 1.0)
-        # score -= 5.0 * discomfort_penalty
+        # TODO: Would it be better here to take into account the previous action to evaluate the change in acc and ddelta?
+        N_SAMPLES_DISCOMFORT = 10
+        # ts = tuple(np.linspace(0, self.params.ctrl_frequency * self.params.timesteps, N_SAMPLES_DISCOMFORT))
+        ts = tuple(np.linspace(0, 0.5, N_SAMPLES_DISCOMFORT))
+        # acc = [action.acc] * N_SAMPLES_DISCOMFORT
+        # ddelta = [action.ddelta] * N_SAMPLES_DISCOMFORT
+        # cmds_list = [VehicleCommands(acc_i, ddelta_i) for acc_i, ddelta_i in zip(acc, ddelta)]
+        cmds_list = [action] * N_SAMPLES_DISCOMFORT
+        action_sequence = DgSampledSequence[VehicleCommands](timestamps=ts, values=cmds_list)
+        discomfort = get_acc_rms(action_sequence)
+        discomfort_penalty = (discomfort - 0.6) * 3.0
+        discomfort_penalty = np.clip(discomfort_penalty, 0.0, 1.0)
+        score -= 5.0 * discomfort_penalty
 
         # 5. vehicle speed
         velocity_difference = np.maximum(future_state.vx - 25.0, 5.0 - future_state.vx)
