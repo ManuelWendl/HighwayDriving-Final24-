@@ -18,10 +18,12 @@ from typing import TypeVar
 
 from .motion_primitives import MotionPrimitivesGenerator, MPGParam
 from .weighted_graph import WeightedGraph, tree_node
+from .goal_lane_commands import goal_lane_commands
 
 from dg_commons.maps.lanes import DgLanelet
 from dg_commons.seq import DgSampledSequence
 from dg_commons.eval.comfort import get_acc_rms
+from dg_commons.eval.efficiency import desired_lane_reached
 from decimal import Decimal
 from matplotlib import cm, pyplot as plt
 import numpy as np
@@ -81,6 +83,11 @@ class Pdm4arAgent(Agent):
         ]
         self.lanes = [lanelet_polygon.shapely_object for lanelet_polygon in self.lanelet_network.lanelet_polygons]
         self.road_boundaries_buffer = init_obs.dg_scenario.road_boundaries_buffer
+        self.lanelet_network: LaneletNetwork = init_obs.dg_scenario.lanelet_network  # type: ignore
+        self.goal_lanelet_id = self.lanelet_network.find_lanelet_by_position(
+            [self.goal.ref_lane.get_control_points()[0].q.p]
+        )[0][0]
+        self.goal_reached = False  # Helper variable to save some computation
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -91,7 +98,15 @@ class Pdm4arAgent(Agent):
         :param sim_obs:
         :return:
         """
-
+        if self.goal_reached:
+            return goal_lane_commands(self, sim_obs)
+        else:
+            # This is taken from L162 ex12/perf_metrics.py
+            if desired_lane_reached(self.lanelet_network, self.goal, sim_obs.players[self.name].state, pos_tol=0.8, heading_tol=0.08):
+                self.goal_reached = True
+                return goal_lane_commands(self, sim_obs)
+            
+        # START lane change planning
         if self.graph is None:
             self.generate_graph(sim_obs)
             self.graph.draw_graph(self.lanes)
