@@ -11,16 +11,23 @@ from dg_commons.sim.models.obstacles import StaticObstacle
 from dg_commons.sim.models.vehicle import VehicleCommands
 from dg_commons.sim.models.vehicle_structures import VehicleGeometry
 from dg_commons.sim.models.vehicle_utils import VehicleParameters
+from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
+
+from typing import TypeVar
+
 
 from .motion_primitives import MotionPrimitivesGenerator, MPGParam
-from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
+from .weighted_graph import WeightedGraph, tree_node
+
 from dg_commons.maps.lanes import DgLanelet
 from dg_commons.seq import DgSampledSequence
 from dg_commons.eval.comfort import get_acc_rms
 from decimal import Decimal
-from matplotlib import pyplot as plt
+from matplotlib import cm, pyplot as plt
 import numpy as np
 import shapely
+
+X = TypeVar("X")
 
 
 @dataclass(frozen=True)
@@ -38,14 +45,16 @@ class Pdm4arAgent(Agent):
     sg: VehicleGeometry
     sp: VehicleParameters
 
+    dyn: BicycleDynamics
+
     mpg_params: MPGParam
     mpg: MotionPrimitivesGenerator
-    dyn: BicycleDynamics
 
     def __init__(self):
         # feel free to remove/modify  the following
         self.params = Pdm4arAgentParams()
         self.myplanner = ()
+        self.graph = None
 
     def on_episode_init(self, init_obs: InitSimObservations):
         """This method is called by the simulator only at the beginning of each simulation.
@@ -72,6 +81,9 @@ class Pdm4arAgent(Agent):
         :param sim_obs:
         :return:
         """
+
+        if self.graph is None:
+            self.generate_graph(sim_obs)
 
         # Update linspace of velocities and actions
         current_ego_state = sim_obs.players[self.name].state
@@ -102,6 +114,31 @@ class Pdm4arAgent(Agent):
             plt.savefig("trajectories.png")
 
         return tr, cmds
+
+    def generate_graph(self, sim_obs: SimObservations):
+        """
+        This method is used to generate a graph from the lanelet network
+        This function is called for ego vehicle only and only once in episode initialization
+        It generates the weighted graph of the motion primitives
+        """
+
+        def recursive_adding(state, graph):
+            tr, cmds = self.generate_Motion_Primitives(state)
+            u = tree_node(state, False)
+            for t, c in zip(tr, cmds):
+                # TODO: Integrate @Antons code for the cost function here, now take constant cost = 1
+                v = tree_node(t.values[-1], False)
+                graph.add_edge(u, v, 1, c)
+                recursive_adding(t.values[-1], graph)
+
+        self.graph = WeightedGraph(
+            adj_list={},
+            weights={},
+            cmds={},
+        )
+
+        init_state = sim_obs.players[self.name].state
+        recursive_adding(init_state, self.graph)
 
     def calculate_cost(self, future_state: VehicleState, action: VehicleCommands, time: float):
         # pass
