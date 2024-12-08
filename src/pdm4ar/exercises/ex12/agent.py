@@ -87,6 +87,9 @@ class Pdm4arAgent(Agent):
         self.goal_lanelet_id = self.lanelet_network.find_lanelet_by_position(
             [self.goal.ref_lane.get_control_points()[0].q.p]
         )[0][0]
+        self.max_steering_angle = None
+        # goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
+        # width = goal_lanelet.control_points[0].r * 2
         self.goal_reached = False  # Helper variable to save some computation
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
@@ -98,6 +101,16 @@ class Pdm4arAgent(Agent):
         :param sim_obs:
         :return:
         """
+        if self.max_steering_angle == None:
+            state_se2transform = SE2Transform(
+                (sim_obs.players["Ego"].state.x, sim_obs.players["Ego"].state.y), sim_obs.players["Ego"].state.psi
+            )
+            goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
+            lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
+            distance_from_center = lane_pose.distance_from_center
+            dx = sim_obs.players["Ego"].state.vx * self.params.ctrl_frequency * self.params.ctrl_timestep
+            self.max_steering_angle = np.arccos(distance_from_center / dx)
+
         if self.goal_reached:
             return goal_lane_commands(self, sim_obs)
         else:
@@ -128,7 +141,7 @@ class Pdm4arAgent(Agent):
 
         def recursive_adding(u, graph, depth=1):
             if not u.is_goal:
-                trs, cmds = self.mpg.generate(u.state)
+                trs, cmds = self.mpg.generate(u.state, self.max_steering_angle)
                 for tr, cmd in zip(trs, cmds):
                     cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
                         tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs
