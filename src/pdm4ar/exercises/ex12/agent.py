@@ -3,6 +3,7 @@ from math import e
 import random
 from dataclasses import dataclass
 from typing import Sequence
+from copy import deepcopy
 
 from commonroad.scenario.lanelet import LaneletNetwork
 from dg_commons import PlayerName, SE2Transform
@@ -103,6 +104,7 @@ class Pdm4arAgent(Agent):
 
         self.ctrl_num = 0  # Helper variable
         self.path = None  # Helper variable to store the path
+        self.motion_primitives = {}
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -119,7 +121,7 @@ class Pdm4arAgent(Agent):
             )
             goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
             lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
-            distance_from_center = lane_pose.distance_from_center / 4
+            distance_from_center = lane_pose.distance_from_center / 4  # 4
             dx = sim_obs.players["Ego"].state.vx * self.params.ctrl_frequency * self.params.ctrl_timestep
             self.max_steering_angle = np.pi / 2 - np.arccos(distance_from_center / dx)
 
@@ -172,10 +174,36 @@ class Pdm4arAgent(Agent):
         It generates the weighted graph of the motion primitives
         """
 
+        def load_motion_primitives(u):
+            """
+            Load motion primitive if precomputed otherwise compute and store
+            """
+            if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives:
+                helper_state = VehicleState(x=0, y=0, psi=0, vx=u.state.vx, delta=u.state.delta)
+                trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle)
+                self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))] = (
+                    trs,
+                    cmds,
+                )
+            else:
+                trs, cmds = self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))]
+
+            return trs, cmds
+
         def recursive_adding(u, graph, depth=1):
+            """
+            Recursively add motion primitives to the graph
+            """
             if not u.is_goal:
-                trs, cmds = self.mpg.generate(u.state, self.max_steering_angle)
-                for tr, cmd in zip(trs, cmds):
+                trs, cmds = load_motion_primitives(u)
+
+                for tr, cmd in zip(deepcopy(trs), deepcopy(cmds)):
+                    for val in tr.values:
+                        x_temp = val.x * np.cos(u.state.psi) - val.y * np.sin(u.state.psi) + u.state.x
+                        val.y = val.x * np.sin(u.state.psi) + val.y * np.cos(u.state.psi) + u.state.y
+                        val.x = x_temp
+                        val.psi += u.state.psi
+
                     cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
                         tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs
                     )

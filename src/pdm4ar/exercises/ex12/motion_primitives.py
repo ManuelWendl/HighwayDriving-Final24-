@@ -106,16 +106,14 @@ class MotionPrimitivesGenerator(TrajGenerator):
             steer_samples = [x0.delta]
         else:
             steer_samples = np.linspace(
-                # max(
-                #    x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt),
-                #    x0.delta - max_steering_angle,
-                # ),
-                # min(
-                #    x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt),
-                #    x0.delta + max_steering_angle,
-                # ),
-                x0.delta - max_steering_angle,
-                x0.delta + max_steering_angle,
+                max(
+                    x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt),
+                    x0.delta - max_steering_angle,
+                ),
+                min(
+                    x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt),
+                    x0.delta + max_steering_angle,
+                ),
                 self.param.steering,
             )
         return v_samples, steer_samples
