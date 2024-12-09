@@ -45,7 +45,7 @@ def goal_lane_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         print("WARNING: Negative velocity gives a high heading penalty")
 
     ddelta = 0
-    if heading > 1e-4:
+    if np.abs(heading) > 1e-4:
         # Correct heading
         # next state
         # psi = psi + dt * dx * math.tan(x0.delta) / self.vg.wheelbase

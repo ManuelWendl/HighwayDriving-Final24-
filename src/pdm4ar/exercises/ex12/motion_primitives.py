@@ -49,20 +49,23 @@ class MotionPrimitivesGenerator(TrajGenerator):
         self.param = param
 
     @time_function
-    def generate(self, x0: VehicleState, max_steering_angle: float) -> tuple[Set[Trajectory], Set[VehicleCommands]]:
+    def generate(
+        self, x0: VehicleState, max_steering_angle: float, verbose: bool = False
+    ) -> tuple[List[Trajectory], List[VehicleCommands]]:
         """
         :param x0: optionally if one wants to generate motion primitives only from a specific state
         :return:
         """
         v_samples, steer_samples = self.generate_samples(x0=x0, max_steering_angle=max_steering_angle)
-        motion_primitives: Set[Trajectory] = set()
-        commands: Set[VehicleCommands] = set()
+        motion_primitives: List[Trajectory] = []
+        commands: List[VehicleCommands] = []
 
         v_start = x0.vx
         sa_start = x0.delta
 
         n = len(v_samples) * len(steer_samples)
-        logger.debug(f"Attempting to generate {n} motion primitives")
+        if verbose:
+            logger.debug(f"Attempting to generate {n} motion primitives")
         for v_end, sa_end in product(v_samples, steer_samples):
             is_valid, input_a, input_sa_rate = self.check_input_constraints(v_start, v_end, sa_start, sa_end)
             if not is_valid:
@@ -77,12 +80,13 @@ class MotionPrimitivesGenerator(TrajGenerator):
             next_state = init_state
             cmds = VehicleCommands(acc=input_a, ddelta=input_sa_rate)
             for n_step in range(1, self.param.n_steps + 1):
-                next_state = self.vehicle_dynamics(next_state, cmds, float(self.param.dt))
-                timestamps.append(n_step * self.param.dt)
+                next_state = self.vehicle_dynamics(next_state, cmds, float(self.param.dt / self.param.n_steps))
+                timestamps.append(n_step * self.param.dt / self.param.n_steps)
                 states.append(next_state)
-            motion_primitives.add(Trajectory(timestamps=timestamps, values=states))
-            commands.add(cmds)
-        logger.info(f"{type(self).__name__}:Found {len(motion_primitives)} feasible motion primitives")
+            motion_primitives.append(Trajectory(timestamps=timestamps, values=states))
+            commands.append(cmds)
+        if verbose:
+            logger.info(f"{type(self).__name__}:Found {len(motion_primitives)} feasible motion primitives")
 
         return motion_primitives, commands
 
@@ -102,8 +106,16 @@ class MotionPrimitivesGenerator(TrajGenerator):
             steer_samples = [x0.delta]
         else:
             steer_samples = np.linspace(
-                max(x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt), -max_steering_angle),
-                min(x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt), max_steering_angle),
+                # max(
+                #    x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt),
+                #    x0.delta - max_steering_angle,
+                # ),
+                # min(
+                #    x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt),
+                #    x0.delta + max_steering_angle,
+                # ),
+                x0.delta - max_steering_angle,
+                x0.delta + max_steering_angle,
                 self.param.steering,
             )
         return v_samples, steer_samples
@@ -116,7 +128,7 @@ class MotionPrimitivesGenerator(TrajGenerator):
         :param sa_end: ending steering angle
         :return: [is_valid,acc,steer_rate]
         """
-        horizon = float(self.param.dt * self.param.n_steps)
+        horizon = float(self.param.dt)
         acc = (v_end - v_start) / horizon
         sa_rate = (sa_end - sa_start) / horizon
         if not (-self.vehicle_param.ddelta_max <= sa_rate <= self.vehicle_param.ddelta_max) or (

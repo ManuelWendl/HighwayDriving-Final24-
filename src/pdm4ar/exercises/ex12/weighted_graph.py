@@ -16,6 +16,9 @@ class tree_node:
         self.state = state
         self.is_goal = is_goal
 
+    def __lt__(self, other):
+        return True
+
 
 AdjacencyList = Mapping[tree_node, Set[tree_node]]
 """An adjacency list from node to a set of nodes."""
@@ -34,6 +37,7 @@ class WeightedGraph:
     adj_list: AdjacencyList
     weights: Mapping[tuple[tree_node, tree_node], float]
     cmds: Mapping[tuple[tree_node, tree_node], VehicleCommands]
+    start: tree_node
 
     def get_weight(self, u: tree_node, v: tree_node) -> Optional[float]:
         """
@@ -69,7 +73,7 @@ class WeightedGraph:
         self.weights[(u, v)] = weight
         self.cmds[(u, v)] = cmds
 
-    def draw_graph(self, lanes):
+    def draw_graph(self, lanes, trajectory=None):
         print("Drawing graph")
         plt.figure(figsize=(100, 50))
         for u, v in self.weights.keys():
@@ -79,5 +83,10 @@ class WeightedGraph:
                 plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ko-", "LineWidth", 0.5)
         for lane in lanes:
             plt.plot(*lane.exterior.xy)
+        if trajectory:
+            x_states = [node.state.x for node in trajectory]
+            y_states = [node.state.y for node in trajectory]
+            plt.plot(x_states, y_states, "bo-", "LineWidth", 0.5)
+
         plt.axis("equal")
         plt.savefig("graph.png")

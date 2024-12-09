@@ -1,3 +1,5 @@
+from calendar import c
+from math import e
 import random
 from dataclasses import dataclass
 from typing import Sequence
@@ -19,6 +21,7 @@ from typing import TypeVar
 from .motion_primitives import MotionPrimitivesGenerator, MPGParam
 from .weighted_graph import WeightedGraph, tree_node
 from .goal_lane_commands import goal_lane_commands
+from .graph_search import Astar
 
 from dg_commons.maps.lanes import DgLanelet
 from dg_commons.seq import DgSampledSequence
@@ -29,8 +32,6 @@ from matplotlib import cm, pyplot as plt
 import numpy as np
 import shapely
 
-X = TypeVar("X")
-
 
 @dataclass(frozen=True)
 class Pdm4arAgentParams:
@@ -38,8 +39,9 @@ class Pdm4arAgentParams:
     ctrl_frequency: float = 5
     n_velocity: int = 1
     n_steering: int = 3
+    n_discretization: int = 50
     delta_angle_threshold: float = np.pi / 4
-    max_tree_dpeth: int = 10
+    max_tree_dpeth: int = 8
 
 
 class Pdm4arAgent(Agent):
@@ -54,12 +56,14 @@ class Pdm4arAgent(Agent):
     dyn: BicycleDynamics
     mpg_params: MPGParam
     mpg: MotionPrimitivesGenerator
+    gs: Astar
 
     def __init__(self):
         # feel free to remove/modify  the following
         self.params = Pdm4arAgentParams()
         self.myplanner = ()
         self.graph: WeightedGraph = None  # type: ignore
+        self.gs = None  # type: ignore
 
     def on_episode_init(self, init_obs: InitSimObservations):
         """This method is called by the simulator only at the beginning of each simulation.
@@ -71,11 +75,11 @@ class Pdm4arAgent(Agent):
         self.dyn = BicycleDynamics(self.sg, self.sp)
         self.mpg_params = MPGParam.from_vehicle_parameters(
             dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequency),
-            n_steps=1,
+            n_steps=self.params.n_discretization,
             n_vel=self.params.n_velocity,
             n_steer=self.params.n_steering,
         )
-        self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor_ivp, self.sp)
+        self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor, self.sp)
         self.lanelet_network: LaneletNetwork = init_obs.dg_scenario.lanelet_network  # type: ignore
         self.boundary_obstacles = [
             obstacle.shape.envelope  # type: ignore
@@ -92,6 +96,9 @@ class Pdm4arAgent(Agent):
         # width = goal_lanelet.control_points[0].r * 2
         self.goal_reached = False  # Helper variable to save some computation
 
+        self.ctrl_num = 0  # Helper variable
+        self.path = None  # Helper variable to store the path
+
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
         Do not modify the signature of this method.
@@ -107,9 +114,9 @@ class Pdm4arAgent(Agent):
             )
             goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
             lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
-            distance_from_center = lane_pose.distance_from_center
+            distance_from_center = lane_pose.distance_from_center / 4
             dx = sim_obs.players["Ego"].state.vx * self.params.ctrl_frequency * self.params.ctrl_timestep
-            self.max_steering_angle = np.arccos(distance_from_center / dx)
+            self.max_steering_angle = np.pi / 2 - np.arccos(distance_from_center / dx)
 
         if self.goal_reached:
             return goal_lane_commands(self, sim_obs)
@@ -118,6 +125,7 @@ class Pdm4arAgent(Agent):
             if desired_lane_reached(
                 self.lanelet_network, self.goal, sim_obs.players[self.name].state, pos_tol=0.8, heading_tol=0.08
             ):
+                print("Goal lane reached")
                 self.goal_reached = True
                 return goal_lane_commands(self, sim_obs)
 
@@ -125,12 +133,32 @@ class Pdm4arAgent(Agent):
         if self.graph is None:
             self.generate_graph(sim_obs)
             self.graph.draw_graph(self.lanes)
+            self.gs = Astar(self.graph)
 
-        # todo implement here some better planning
-        rnd_acc = random.random() * 0.1
-        rnd_ddelta = (random.random() - 0.5) * 0.1
+            self.path = self.gs.path(self.graph.start)
+            self.graph.draw_graph(self.lanes, self.path)
 
-        return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
+        if self.path is not None and (self.ctrl_num // self.params.ctrl_frequency) < (len(self.path) - 1):
+            indx = self.ctrl_num // self.params.ctrl_frequency
+            commands = self.graph.get_cmds(self.path[indx], self.path[indx + 1])
+            print(
+                self.path[indx].state.x,
+                sim_obs.players[self.name].state.x,
+                self.path[indx].state.y,
+                sim_obs.players[self.name].state.y,
+            )
+            acc = commands.acc
+            ddelta = commands.ddelta
+
+            self.ctrl_num += 1
+            return VehicleCommands(acc=acc, ddelta=ddelta)
+        else:
+            print("Taking Random Action")
+            rnd_acc = random.random() * 0.1
+            rnd_ddelta = (random.random() - 0.5) * 0.1
+
+            self.ctrl_num += 1
+            return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
 
     def generate_graph(self, sim_obs: SimObservations):
         """
@@ -155,14 +183,15 @@ class Pdm4arAgent(Agent):
             else:
                 print("Goal node reached")
 
+        init_state = sim_obs.players[self.name].state
+        init_node = tree_node(state=init_state, is_goal=False)
+
         self.graph = WeightedGraph(
             adj_list={},
             weights={},
             cmds={},
+            start=init_node,
         )
-
-        init_state = sim_obs.players[self.name].state
-        init_node = tree_node(state=init_state, is_goal=False)
         recursive_adding(init_node, self.graph)
 
     def calculate_cost(
@@ -173,7 +202,7 @@ class Pdm4arAgent(Agent):
         vehicle_shapely = self.get_vehicle_shapely(future_state)
         # 0. Check whether future state is still within playground
         inside_playground = True
-        lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer)
+        lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer / 2)
         if not shapely.within(vehicle_shapely, lanes_union):
             return float("inf"), False, False, False
 
@@ -186,31 +215,26 @@ class Pdm4arAgent(Agent):
         lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
         heading_delta = lane_pose.relative_heading
-        inside_goal_lane = lane_pose.inside
 
         if np.abs(heading_delta) > np.pi / 4:
             heading_delta_over_threshold = True
+            return float("inf"), False, False, True
+
         else:
             heading_delta_over_threshold = False
 
-        if not inside_goal_lane:
+        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.08):
+            is_goal_state = True
+        else:
             is_goal_state = False
             distance_to_goal_lane = lane_pose.distance_from_center
             score *= 0.7
             score -= 5 * distance_to_goal_lane
 
-            if np.abs(heading_delta) >= 0.1:
-                heading_penalty = (np.abs(heading_delta) - 0.1) * 10.0
-                heading_penalty = np.clip(heading_penalty, 0.0, 1.0)
-                score -= 5.0 * heading_penalty
-        else:
-            if np.abs(heading_delta) < 0.1:
-                is_goal_state = True
-            else:
-                is_goal_state = False
-                heading_penalty = (np.abs(heading_delta) - 0.1) * 10.0
-                heading_penalty = np.clip(heading_penalty, 0.0, 1.0)
-                score -= 5.0 * heading_penalty
+        if np.abs(heading_delta) >= 0.1:
+            heading_penalty = (np.abs(heading_delta) - 0.1) * 10.0
+            heading_penalty = np.clip(heading_penalty, 0.0, 1.0)
+            score -= 5.0 * heading_penalty
 
         # 2. lane changing time
         lane_changing_penalty = (time - 5.0) / 5.0
