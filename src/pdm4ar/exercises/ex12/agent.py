@@ -31,6 +31,9 @@ from decimal import Decimal
 from matplotlib import cm, pyplot as plt
 import numpy as np
 import shapely
+from dg_commons.controllers.steer import SteerController, SteerControllerParam
+from dg_commons.controllers.pure_pursuit import PurePursuit, PurePursuitParam
+from dg_commons.sim.models.vehicle import VehicleModel
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,8 @@ class Pdm4arAgent(Agent):
         # goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
         # width = goal_lanelet.control_points[0].r * 2
         self.goal_reached = False  # Helper variable to save some computation
+        self.goal_lane_pid = SteerController.from_vehicle_params(self.sp)
+        self.goal_lane_purepursuit = PurePursuit.from_model_geometry(self.sg)
 
         self.ctrl_num = 0  # Helper variable
         self.path = None  # Helper variable to store the path

@@ -14,12 +14,16 @@ from dg_commons.sim.models.vehicle_structures import VehicleGeometry
 from dg_commons.sim.models.vehicle_utils import VehicleParameters
 from dg_commons.maps import DgLanelet, DgLanePose
 from dg_commons.sim import extract_pose_from_state
+from dg_commons.eval.safety import _get_ttc
+from dg_commons.sim.models.vehicle import VehicleModel
 
 
 from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
 from decimal import Decimal
 from matplotlib import pyplot as plt
 import numpy as np
+
+from dg_commons.sim.agents.idm_agent.idm_agent import IDMAgent
 
 
 def goal_lane_commands(self, sim_obs: SimObservations) -> VehicleCommands:
@@ -45,28 +49,34 @@ def goal_lane_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         print("WARNING: Negative velocity gives a high heading penalty")
 
     ddelta = 0
-    if np.abs(heading) > 1e-4:
+    if np.abs(heading) > 1e-10:
         # Correct heading
         # next state
         # psi = psi + dt * dx * math.tan(x0.delta) / self.vg.wheelbase
-        # heading = - dt * dx * math.tan(x0.delta) / self.vg.wheelbase
-        ddelta = np.arctan(-heading * self.dyn.vg.wheelbase / (0.1 * ego_state.vx))
+        # compensate heading
+        # rel_heading = - dt * dx * math.tan(x0.delta) / self.vg.wheelbase
+        ddelta = 0.5 * np.arctan(-heading * self.dyn.vg.wheelbase / (0.1 * ego_state.vx))
+        # print(f"Correcting heading: {heading} with ddelta: {ddelta}")
+        self.goal_lane_pid.update_measurement(measurement=ego_state.delta)
+        self.goal_lane_pid.update_reference(ddelta)
+        ddelta = self.goal_lane_pid.get_control(float(sim_obs.time))
+
     # Decelerate if collision is imminent
+    # see more in dg_commons/eval/safety.py
     acc = 0
     time_to_collision = np.inf
     for player_name, player_obs in sim_obs.players.items():
-        if player_name == self.name:
-            continue
-        other_state: VehicleState = player_obs.state  # type: ignore
-        other_lanelet_ids = self.lanelet_network.find_lanelet_by_position([np.array([other_state.x, other_state.y])])
-
-        # Check if the other player is on the same lanelet
-        if self.goal_lanelet_id in other_lanelet_ids:
-            other_shapely = self.get_vehicle_shapely(other_state)
-            vehicle_shapely = self.get_vehicle_shapely(ego_state)
-            # compute distance between shapelies
-            distance = vehicle_shapely.distance(other_shapely)
-            time_to_collision = min(time_to_collision, distance / ego_state.vx)
+        if player_name != self.name:
+            time_to_collision = min(
+                time_to_collision,
+                _get_ttc(
+                    ego_state,
+                    player_obs.state,
+                    VehicleModel(ego_state, self.sg, self.sp),
+                    VehicleModel(player_obs.state, self.sg, self.sp),  # type: ignore
+                )[0],
+            )
+    print(f"Time to collision: {time_to_collision}")
 
     if time_to_collision < 1:
         # Decelerate, TODO: more smoothly
