@@ -41,7 +41,7 @@ from dg_commons.sim.models.vehicle import VehicleModel
 from .utils import get_vehicle_shapely
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class Pdm4arAgentParams:
     ctrl_timestep: float = 0.1
     ctrl_frequency: float = 5
@@ -124,6 +124,7 @@ class Pdm4arAgent(Agent):
         :return:
         """
         if self.max_steering_angle == None:
+            self.params.ctrl_frequency = np.round(5 * 11.23 / sim_obs.players["Ego"].state.vx)
             state_se2transform = SE2Transform(
                 (sim_obs.players["Ego"].state.x, sim_obs.players["Ego"].state.y), sim_obs.players["Ego"].state.psi
             )
