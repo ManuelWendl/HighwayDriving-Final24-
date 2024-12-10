@@ -12,9 +12,10 @@ import matplotlib.pyplot as plt
 
 
 class tree_node:
-    def __init__(self, state: VehicleState, is_goal: bool = False):
+    def __init__(self, state: VehicleState, depth: int, data: float = 0):
         self.state = state
-        self.is_goal = is_goal
+        self.depth = depth
+        self.data = data  # 0 for normal nodes, 1 for goal nodes (for ego vehicle), probability of being in state (for other vehicles)
 
     def __lt__(self, other):
         return True
@@ -77,7 +78,7 @@ class WeightedGraph:
         print("Drawing graph")
         plt.figure(figsize=(100, 50))
         for u, v in self.weights.keys():
-            if v.is_goal:
+            if v.data == 1:
                 plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-", "LineWidth", 0.5)
             else:
                 plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ko-", "LineWidth", 0.5)

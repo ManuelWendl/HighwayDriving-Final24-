@@ -38,7 +38,7 @@ class Astar(InformedGraphSearch):
         while Q:
             _, s = heapq.heappop(Q)
 
-            if s.is_goal:
+            if s.data == 1:
                 path = []
                 current = s
                 while current is not None:

@@ -1,3 +1,4 @@
+from typing import List
 from calendar import c
 from math import e
 import random
@@ -46,6 +47,9 @@ class Pdm4arAgentParams:
     n_discretization: int = 50
     delta_angle_threshold: float = np.pi / 4
     max_tree_dpeth: int = 8
+
+    n_velocity_opponent: int = 1
+    probability_threshold_opponent: float = 0.01
 
 
 class Pdm4arAgent(Agent):
@@ -104,7 +108,7 @@ class Pdm4arAgent(Agent):
 
         self.ctrl_num = 0  # Helper variable
         self.path = None  # Helper variable to store the path
-        self.motion_primitives = {}
+        self.motion_primitives = {}  # Helper variable to store the motion primitives
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -138,36 +142,33 @@ class Pdm4arAgent(Agent):
 
         # START lane change planning
         if self.graph is None:
-            self.generate_graph(sim_obs)
+            self.generate_ego_graph(sim_obs)
             self.graph.draw_graph(self.lanes)
             self.gs = Astar(self.graph)
 
             self.path = self.gs.path(self.graph.start)
             self.graph.draw_graph(self.lanes, self.path)
 
+        # Get opponent graphs
+        opponent_graphs, depth_dicts = self.get_oponent_graph(sim_obs)
+
         if self.path is not None and (self.ctrl_num // self.params.ctrl_frequency) < (len(self.path) - 1):
+            # Changing control inputs every self.params.ctrl_frequency function calls
             indx = self.ctrl_num // self.params.ctrl_frequency
             commands = self.graph.get_cmds(self.path[indx], self.path[indx + 1])
-            print(
-                self.path[indx].state.x,
-                sim_obs.players[self.name].state.x,
-                self.path[indx].state.y,
-                sim_obs.players[self.name].state.y,
-            )
             acc = commands.acc
             ddelta = commands.ddelta
-
             self.ctrl_num += 1
             return VehicleCommands(acc=acc, ddelta=ddelta)
         else:
-            print("Taking Random Action")
+            print("Fallback: Taking Random Action")
             rnd_acc = random.random() * 0.1
             rnd_ddelta = (random.random() - 0.5) * 0.1
 
             self.ctrl_num += 1
             return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
 
-    def generate_graph(self, sim_obs: SimObservations):
+    def generate_ego_graph(self, sim_obs: SimObservations):
         """
         This method is used to generate a graph from the lanelet network
         This function is called for ego vehicle
@@ -194,7 +195,7 @@ class Pdm4arAgent(Agent):
             """
             Recursively add motion primitives to the graph
             """
-            if not u.is_goal:
+            if u.data != 1:
                 trs, cmds = load_motion_primitives(u)
 
                 for tr, cmd in zip(deepcopy(trs), deepcopy(cmds)):
@@ -209,7 +210,7 @@ class Pdm4arAgent(Agent):
                     )
 
                     if inside_playground and not heading_delta_over_threshold:
-                        v = tree_node(tr.values[-1], is_goal)
+                        v = tree_node(tr.values[-1], depth=depth, data=float(is_goal))
                         graph.add_edge(u, v, cost, cmd)
                         if depth < self.params.max_tree_dpeth:
                             recursive_adding(v, graph, depth + 1)
@@ -217,7 +218,7 @@ class Pdm4arAgent(Agent):
                 print("Goal node reached")
 
         init_state = sim_obs.players[self.name].state
-        init_node = tree_node(state=init_state, is_goal=False)
+        init_node = tree_node(state=init_state, depth=0, data=0)
 
         self.graph = WeightedGraph(
             adj_list={},
@@ -325,3 +326,75 @@ class Pdm4arAgent(Agent):
         vehicle_shapely = shapely.Polygon((tuple(front_left), tuple(front_right), tuple(back_left), tuple(back_right)))
 
         return vehicle_shapely
+
+    def get_oponent_graph(self, sim_obs: SimObservations) -> tuple[List[WeightedGraph], List[dict]]:
+        """
+        Generates the graphs for the opponent vehicle
+        """
+
+        def recursive_adding(u, graph, depth_dict, depth=1):
+            """
+            Recursively add motion primitives to the graph
+            """
+
+            if self.params.n_velocity_opponent == 1:
+                velocities = [u.state.vx]
+            else:
+                velocities = np.linspace(
+                    max(
+                        u.state.vx + self.sp.acc_limits[0] * 2 / 3 * float(self.params.ctrl_timestep),
+                        self.sp.vx_limits[0],
+                    ),
+                    min(
+                        u.state.vx + self.sp.acc_limits[1] * 2 / 3 * float(self.params.ctrl_timestep),
+                        self.sp.vx_limits[1],
+                    ),
+                    self.params.n_velocity_opponent,
+                )
+
+            d_x_normal = np.cos(u.state.psi)
+            d_y_normal = np.sin(u.state.psi)
+            dt = self.params.ctrl_timestep * self.params.ctrl_frequency
+
+            for v in velocities:
+                dx = d_x_normal * (v + u.state.vx) / 2 * dt
+                dy = d_y_normal * (v + u.state.vx) / 2 * dt
+                next_state = VehicleState(
+                    x=u.state.x + dx, y=u.state.y + dy, psi=u.state.psi, vx=v, delta=u.state.delta
+                )
+                if v == u.state.vx:
+                    cp = 0.8
+                else:
+                    cp = 0.2 / (self.params.n_velocity_opponent - 1)
+
+                p = u.data * cp
+                if p > self.params.probability_threshold_opponent:
+                    v = tree_node(next_state, depth=depth, data=p)
+                    if depth not in depth_dict:
+                        depth_dict[depth] = []
+                    depth_dict[depth].append(v)
+                    graph.add_edge(u, v, 0, VehicleCommands(acc=0, ddelta=0))
+
+                    if depth < self.params.max_tree_dpeth:
+                        recursive_adding(v, graph, depth_dict, depth + 1)
+
+        graphs = []
+        depth_dicts = []
+        for player_name, player_obs in sim_obs.players.items():
+            if player_name == self.name:
+                continue
+            init_state = player_obs.state
+            init_node = tree_node(state=init_state, depth=0, data=1)
+
+            graph = WeightedGraph(
+                adj_list={},
+                weights={},
+                cmds={},
+                start=init_node,
+            )
+            depth_dict = {}
+            recursive_adding(init_node, graph, depth_dict=depth_dict)
+            graphs.append(graph)
+            depth_dicts.append(depth_dict)
+
+        return graphs, depth_dicts
