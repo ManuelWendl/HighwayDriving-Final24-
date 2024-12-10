@@ -1,3 +1,4 @@
+from hmac import new
 from typing import List
 from calendar import c
 from math import e
@@ -111,6 +112,7 @@ class Pdm4arAgent(Agent):
         self.ctrl_num = 0  # Helper variable
         self.path = None  # Helper variable to store the path
         self.motion_primitives = {}  # Helper variable to store the motion primitives
+        self.last_next_state = None  # Helper variable to store the last next state
 
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
@@ -148,26 +150,43 @@ class Pdm4arAgent(Agent):
             self.graph.draw_graph(self.lanes)
             self.gs = Astar(self.graph, self.sg)
 
-            # Get opponent graphs
+        if self.ctrl_num % self.params.ctrl_frequency == 0:
+            # Generate the graph for the opponent vehicles
             opponent_graphs, depth_dicts = self.get_oponent_graph(sim_obs)
-            self.path = self.gs.path(self.graph.start)
-            self.graph.draw_graph(self.lanes, self.path)
+            # TODO: Implement ego tree update
+            if self.last_next_state is not None:
+                self.update_ego_tree(self.graph, self.last_next_state, sim_obs)
+            # Generate the current path
+            self.path = self.gs.path(self.graph.start, depth_dicts)
+            if self.path == []:
+                print("No path found")
+                return VehicleCommands(acc=0, ddelta=0)
+            self.graph.draw_graph(self.lanes, self.path, opponent_graphs)
 
-        if self.path is not None and (self.ctrl_num // self.params.ctrl_frequency) < (len(self.path) - 1):
-            # Changing control inputs every self.params.ctrl_frequency function calls
-            indx = self.ctrl_num // self.params.ctrl_frequency
-            commands = self.graph.get_cmds(self.path[indx], self.path[indx + 1])
-            acc = commands.acc
-            ddelta = commands.ddelta
-            self.ctrl_num += 1
-            return VehicleCommands(acc=acc, ddelta=ddelta)
+        # Extract the commands from the path (MPC style)
+        commands = self.graph.get_cmds(self.path[0], self.path[1])
+        self.last_next_state = self.path[1]
+
+        acc = commands.acc
+        ddelta = commands.ddelta
+        self.ctrl_num += 1
+        return VehicleCommands(acc=acc, ddelta=ddelta)
+
+    def load_motion_primitives(self, u):
+        """
+        Load motion primitive if precomputed otherwise compute and store
+        """
+        if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives:
+            helper_state = VehicleState(x=0, y=0, psi=0, vx=u.state.vx, delta=u.state.delta)
+            trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle)
+            self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))] = (
+                trs,
+                cmds,
+            )
         else:
-            print("Fallback: Taking Random Action")
-            rnd_acc = random.random() * 0.1
-            rnd_ddelta = (random.random() - 0.5) * 0.1
+            trs, cmds = self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))]
 
-            self.ctrl_num += 1
-            return VehicleCommands(acc=rnd_acc, ddelta=rnd_ddelta)
+        return trs, cmds
 
     def generate_ego_graph(self, sim_obs: SimObservations):
         """
@@ -176,28 +195,12 @@ class Pdm4arAgent(Agent):
         It generates the weighted graph of the motion primitives
         """
 
-        def load_motion_primitives(u):
-            """
-            Load motion primitive if precomputed otherwise compute and store
-            """
-            if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives:
-                helper_state = VehicleState(x=0, y=0, psi=0, vx=u.state.vx, delta=u.state.delta)
-                trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle)
-                self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))] = (
-                    trs,
-                    cmds,
-                )
-            else:
-                trs, cmds = self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))]
-
-            return trs, cmds
-
         def recursive_adding(u, graph, depth=1):
             """
             Recursively add motion primitives to the graph
             """
             if u.data != 1:
-                trs, cmds = load_motion_primitives(u)
+                trs, cmds = self.load_motion_primitives(u)
 
                 for tr, cmd in zip(deepcopy(trs), deepcopy(cmds)):
                     for val in tr.values:
@@ -222,12 +225,55 @@ class Pdm4arAgent(Agent):
         init_node = tree_node(state=init_state, depth=0, data=0)
 
         self.graph = WeightedGraph(
-            adj_list={},
             weights={},
             cmds={},
             start=init_node,
         )
         recursive_adding(init_node, self.graph)
+
+    def update_ego_tree(self, graph, reached_node: tree_node, sim_obs: SimObservations):
+        """
+        This method is used to update the ego tree
+        """
+
+        def add_successors(node):
+            for s in node.successors:
+                if s.successors != []:
+                    add_successors(s)
+                else:
+                    trs, cmds = self.load_motion_primitives(s)
+                    for tr, cmd in zip(deepcopy(trs), deepcopy(cmds)):
+                        for val in tr.values:
+                            x_temp = val.x * np.cos(s.state.psi) - val.y * np.sin(s.state.psi) + s.state.x
+                            val.y = val.x * np.sin(s.state.psi) + val.y * np.cos(s.state.psi) + s.state.y
+                            val.x = x_temp
+                            val.psi += s.state.psi
+
+                        cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
+                            tr.values[-1], cmd, s.depth * float(tr.timestamps[-1]), sim_obs
+                        )
+
+                        if inside_playground and not heading_delta_over_threshold:
+                            v = tree_node(tr.values[-1], depth=s.depth, data=float(is_goal))
+                            graph.add_edge(s, v, cost, cmd)
+
+        newstart = None
+
+        for node in graph.start.successors:
+            del graph.weights[(graph.start, node)]
+            del graph.cmds[(graph.start, node)]
+
+            if node == reached_node:
+                newstart = reached_node
+                add_successors(newstart)
+            else:
+                graph.remove_node(node)
+
+        if newstart is not None:
+            graph.start = newstart
+
+        else:
+            print("Next node not found in the graph")
 
     def calculate_cost(
         self, future_state: VehicleState, action: VehicleCommands, time: float, sim_obs: SimObservations
@@ -375,7 +421,6 @@ class Pdm4arAgent(Agent):
             init_node = tree_node(state=init_state, depth=0, data=1)
 
             graph = WeightedGraph(
-                adj_list={},
                 weights={},
                 cmds={},
                 start=init_node,

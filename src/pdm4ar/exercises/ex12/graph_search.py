@@ -74,10 +74,7 @@ class Astar(InformedGraphSearch):
                     current = P[current]
                 return path
 
-            if s not in self.graph.adj_list:
-                continue
-
-            for snext in self.graph.adj_list[s]:
+            for snext in s.successors:
                 we = self.graph.get_weight(s, snext)
                 if we:
                     wn = C[s] + we
@@ -87,7 +84,7 @@ class Astar(InformedGraphSearch):
                 # Check for collision and don't push the node if it collides
                 if (
                     self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth)
-                    > self.params.collision_rejection_threshold
+                    < self.params.collision_rejection_threshold
                 ):
                     if snext not in H:
                         H.update({snext: self.heuristic(snext)})

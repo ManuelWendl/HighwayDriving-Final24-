@@ -13,16 +13,14 @@ import matplotlib.pyplot as plt
 
 class tree_node:
     def __init__(self, state: VehicleState, depth: int, data: float = 0):
+        self.successors = []
         self.state = state
         self.depth = depth
         self.data = data  # 0 for normal nodes, 1 for goal nodes (for ego vehicle), probability of being in state (for other vehicles)
 
     def __lt__(self, other):
+        # TODO: Write more meaningful comparison for heapq comparison
         return True
-
-
-AdjacencyList = Mapping[tree_node, Set[tree_node]]
-"""An adjacency list from node to a set of nodes."""
 
 
 class EdgeNotFound(Exception):
@@ -35,7 +33,6 @@ class CommandNotFound(Exception):
 
 @dataclass
 class WeightedGraph:
-    adj_list: AdjacencyList
     weights: Mapping[tuple[tree_node, tree_node], float]
     cmds: Mapping[tuple[tree_node, tree_node], VehicleCommands]
     start: tree_node
@@ -68,15 +65,20 @@ class WeightedGraph:
         :param v: The "to" of the edge
         :param weight: The weight of the edge
         """
-        if u not in self.adj_list:
-            self.adj_list[u] = set()
-        self.adj_list[u].add(v)
+        u.successors.append(v)
         self.weights[(u, v)] = weight
         self.cmds[(u, v)] = cmds
 
-    def draw_graph(self, lanes, trajectory=None):
+    def remove_node(self, u: tree_node):
+        for v in u.successors:
+            if v.successors != []:
+                self.remove_node(v)
+            del self.weights[(u, v)]
+            del self.cmds[(u, v)]
+
+    def draw_graph(self, lanes, trajectory=None, opponent_graphs=None):
         print("Drawing graph")
-        plt.figure(figsize=(100, 50))
+        plt.figure(figsize=(50, 10))
         for u, v in self.weights.keys():
             if v.data == 1:
                 plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-", "LineWidth", 0.5)
@@ -88,6 +90,10 @@ class WeightedGraph:
             x_states = [node.state.x for node in trajectory]
             y_states = [node.state.y for node in trajectory]
             plt.plot(x_states, y_states, "bo-", "LineWidth", 0.5)
+        if opponent_graphs:
+            for graph in opponent_graphs:
+                for u, v in graph.weights.keys():
+                    plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "go-", "LineWidth", 0.5)
 
         plt.axis("equal")
         plt.savefig("graph.png")
