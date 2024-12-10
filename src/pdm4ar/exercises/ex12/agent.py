@@ -53,7 +53,7 @@ class Pdm4arAgentParams:
 
     n_velocity_opponent: int = 1
     probability_threshold_opponent: float = 0.01
-    num_lanes_outside_reach: int = 2
+    num_lanes_outside_reach: int = 1.5
 
 
 class Pdm4arAgent(Agent):
@@ -107,7 +107,7 @@ class Pdm4arAgent(Agent):
         state_se2transform = SE2Transform([0, 0], 0)
         goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
         lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
-        self.lanewidth = np.abs(np.abs(lane_pose.distance_from_right) - np.abs(lane_pose.distance_from_left))
+        self.lanewidth = np.abs(np.abs(lane_pose.distance_from_right) - np.abs(lane_pose.distance_from_left)) * 2
 
         self.max_steering_angle = None
         # goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
@@ -261,7 +261,7 @@ class Pdm4arAgent(Agent):
                             self.calculate_cost(tr.values[-1], cmd, s.depth * float(tr.timestamps[-1]), sim_obs)
                         )
 
-                        if inside_playground and not heading_delta_over_threshold:
+                        if inside_playground and not heading_delta_over_threshold and not is_outside_reach:
                             v = tree_node(tr.values[-1], depth=s.depth, data=float(is_goal))
                             graph.add_edge(s, v, cost, cmd)
 
@@ -304,12 +304,14 @@ class Pdm4arAgent(Agent):
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
         heading_delta = lane_pose.relative_heading
 
-        lane_normal_vector_angle = future_state.psi + heading_delta + np.pi / 2
+        lane_normal_vector_angle = future_state.psi - heading_delta + np.pi / 2
         lane_normal_vector = np.array([np.cos(lane_normal_vector_angle), np.sin(lane_normal_vector_angle)]).T
 
         if (
-            np.array([future_state.x - self.graph.start.state.x, future_state.y - self.graph.start.state.y])
-            @ lane_normal_vector
+            np.linalg.norm(
+                (np.array([future_state.x - self.graph.start.state.x, future_state.y - self.graph.start.state.y]))
+                @ lane_normal_vector
+            )
             > self.params.num_lanes_outside_reach * self.lanewidth
         ):
             is_outside_reach = True
