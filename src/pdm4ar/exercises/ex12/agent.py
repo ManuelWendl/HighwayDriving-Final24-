@@ -37,6 +37,8 @@ from dg_commons.controllers.steer import SteerController, SteerControllerParam
 from dg_commons.controllers.pure_pursuit import PurePursuit, PurePursuitParam
 from dg_commons.sim.models.vehicle import VehicleModel
 
+from .utils import get_vehicle_shapely
+
 
 @dataclass(frozen=True)
 class Pdm4arAgentParams:
@@ -144,13 +146,12 @@ class Pdm4arAgent(Agent):
         if self.graph is None:
             self.generate_ego_graph(sim_obs)
             self.graph.draw_graph(self.lanes)
-            self.gs = Astar(self.graph)
+            self.gs = Astar(self.graph, self.sg)
 
+            # Get opponent graphs
+            opponent_graphs, depth_dicts = self.get_oponent_graph(sim_obs)
             self.path = self.gs.path(self.graph.start)
             self.graph.draw_graph(self.lanes, self.path)
-
-        # Get opponent graphs
-        opponent_graphs, depth_dicts = self.get_oponent_graph(sim_obs)
 
         if self.path is not None and (self.ctrl_num // self.params.ctrl_frequency) < (len(self.path) - 1):
             # Changing control inputs every self.params.ctrl_frequency function calls
@@ -231,9 +232,8 @@ class Pdm4arAgent(Agent):
     def calculate_cost(
         self, future_state: VehicleState, action: VehicleCommands, time: float, sim_obs: SimObservations
     ):
-        # pass
         score = 100
-        vehicle_shapely = self.get_vehicle_shapely(future_state)
+        vehicle_shapely = get_vehicle_shapely(self.sg, future_state)
         # 0. Check whether future state is still within playground
         inside_playground = True
         lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer / 2)
@@ -287,7 +287,7 @@ class Pdm4arAgent(Agent):
 
             # Check if the other player is on the same lanelet
             if lanelet_id in other_lanelet_ids:
-                other_shapely = self.get_vehicle_shapely(other_state)
+                other_shapely = get_vehicle_shapely(self.sg, other_state)
                 # compute distance between shapelies
                 distance = vehicle_shapely.distance(other_shapely)
                 time_to_collision = min(time_to_collision, distance / future_state.vx)
@@ -314,18 +314,6 @@ class Pdm4arAgent(Agent):
         score -= 5.0 * velocity_penalty
 
         return -score, is_goal_state, inside_playground, heading_delta_over_threshold
-
-    def get_vehicle_shapely(self, state: VehicleState):
-        cog = np.array([state.x, state.y])
-        R = np.array([[np.cos(state.psi), -np.sin(state.psi)], [np.sin(state.psi), np.cos(state.psi)]])
-        front_left = cog + R @ np.array([self.sg.lf, self.sg.w_half]).T
-        front_right = cog + R @ np.array([self.sg.lf, -self.sg.w_half]).T
-        back_left = cog + R @ np.array([self.sg.lr, self.sg.w_half]).T
-        back_right = cog + R @ np.array([self.sg.lr, -self.sg.w_half]).T
-
-        vehicle_shapely = shapely.Polygon((tuple(front_left), tuple(front_right), tuple(back_left), tuple(back_right)))
-
-        return vehicle_shapely
 
     def get_oponent_graph(self, sim_obs: SimObservations) -> tuple[List[WeightedGraph], List[dict]]:
         """
