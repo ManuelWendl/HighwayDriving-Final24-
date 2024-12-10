@@ -53,6 +53,7 @@ class Pdm4arAgentParams:
 
     n_velocity_opponent: int = 1
     probability_threshold_opponent: float = 0.01
+    num_lanes_outside_reach: int = 2
 
 
 class Pdm4arAgent(Agent):
@@ -102,6 +103,12 @@ class Pdm4arAgent(Agent):
         self.goal_lanelet_id = self.lanelet_network.find_lanelet_by_position(
             [self.goal.ref_lane.get_control_points()[0].q.p]
         )[0][0]
+
+        state_se2transform = SE2Transform([0, 0], 0)
+        goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
+        lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
+        self.lanewidth = np.abs(np.abs(lane_pose.distance_from_right) - np.abs(lane_pose.distance_from_left))
+
         self.max_steering_angle = None
         # goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
         # width = goal_lanelet.control_points[0].r * 2
@@ -210,11 +217,11 @@ class Pdm4arAgent(Agent):
                         val.x = x_temp
                         val.psi += u.state.psi
 
-                    cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
-                        tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs
+                    cost, is_goal, inside_playground, heading_delta_over_threshold, is_outside_reach = (
+                        self.calculate_cost(tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs)
                     )
 
-                    if inside_playground and not heading_delta_over_threshold:
+                    if inside_playground and not heading_delta_over_threshold and not is_outside_reach:
                         v = tree_node(tr.values[-1], depth=depth, data=float(is_goal))
                         graph.add_edge(u, v, cost, cmd)
                         if depth < self.params.max_tree_dpeth:
@@ -250,8 +257,8 @@ class Pdm4arAgent(Agent):
                             val.x = x_temp
                             val.psi += s.state.psi
 
-                        cost, is_goal, inside_playground, heading_delta_over_threshold = self.calculate_cost(
-                            tr.values[-1], cmd, s.depth * float(tr.timestamps[-1]), sim_obs
+                        cost, is_goal, inside_playground, heading_delta_over_threshold, is_outside_reach = (
+                            self.calculate_cost(tr.values[-1], cmd, s.depth * float(tr.timestamps[-1]), sim_obs)
                         )
 
                         if inside_playground and not heading_delta_over_threshold:
@@ -285,7 +292,7 @@ class Pdm4arAgent(Agent):
         inside_playground = True
         lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer / 2)
         if not shapely.within(vehicle_shapely, lanes_union):
-            return float("inf"), False, False, False
+            return float("inf"), False, False, False, False
 
         # 1. distance and heading wrt goal lane and whether it is a goal node
 
@@ -297,9 +304,21 @@ class Pdm4arAgent(Agent):
         lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
         heading_delta = lane_pose.relative_heading
 
+        lane_normal_vector_angle = future_state.psi + heading_delta + np.pi / 2
+        lane_normal_vector = np.array([np.cos(lane_normal_vector_angle), np.sin(lane_normal_vector_angle)]).T
+
+        if (
+            np.array([future_state.x - self.graph.start.state.x, future_state.y - self.graph.start.state.y])
+            @ lane_normal_vector
+            > self.params.num_lanes_outside_reach * self.lanewidth
+        ):
+            is_outside_reach = True
+        else:
+            is_outside_reach = False
+
         if np.abs(heading_delta) > np.pi / 4:
             heading_delta_over_threshold = True
-            return float("inf"), False, False, True
+            return float("inf"), False, False, True, False
 
         else:
             heading_delta_over_threshold = False
@@ -360,7 +379,7 @@ class Pdm4arAgent(Agent):
         velocity_penalty = np.clip(velocity_penalty, 0.0, 1.0)
         score -= 5.0 * velocity_penalty
 
-        return -score, is_goal_state, inside_playground, heading_delta_over_threshold
+        return -score, is_goal_state, inside_playground, heading_delta_over_threshold, is_outside_reach
 
     def get_oponent_graph(self, sim_obs: SimObservations) -> tuple[List[WeightedGraph], List[dict]]:
         """
