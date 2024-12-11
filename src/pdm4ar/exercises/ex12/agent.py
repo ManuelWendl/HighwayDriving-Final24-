@@ -49,12 +49,12 @@ class Pdm4arAgentParams:
     n_steering: int = 3
     n_discretization: int = 50
     delta_angle_threshold: float = np.pi / 4
-    max_tree_dpeth: int = 12
+    max_tree_dpeth: int = 10
     num_lanes_outside_reach: int = 1.5
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.01
-    probability_good_opponent: float = 0.75
+    probability_good_opponent: float = 0.5
 
 
 class Pdm4arAgent(Agent):
