@@ -91,7 +91,7 @@ class WeightedGraph:
             y_states = [node.state.y for node in trajectory]
             plt.plot(x_states, y_states, "bo-", "LineWidth", 0.5)
         if opponent_graphs:
-            for graph in opponent_graphs:
+            for graph in opponent_graphs.values():
                 for u, v in graph.weights.keys():
                     plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "go-", "LineWidth", 0.5)
 

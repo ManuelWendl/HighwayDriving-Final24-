@@ -123,8 +123,9 @@ class Pdm4arAgent(Agent):
         """
         state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
         time_count = 0
-        while state.y < self.lanewidth / 4:
-            time_count += 1
+        while state.y < self.lanewidth / 8:
+            time_count += 2
+            state = self.dyn.successor(state, VehicleCommands(acc=0, ddelta=self.sp.ddelta_max), 0.01)
             state = self.dyn.successor(state, VehicleCommands(acc=0, ddelta=self.sp.ddelta_max), 0.01)
 
         horizon = time_count * 0.01
@@ -137,13 +138,13 @@ class Pdm4arAgent(Agent):
         lowerbound_ddelta = ddelta_max / 2
         upperbound_ddelta = ddelta_max
 
-        while np.abs(state.y - self.lanewidth / 4) >= 1e-3:
+        while np.abs(state.y - self.lanewidth / 8) >= 1e-3:
             state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
             for _ in range(int(self.params.ctrl_frequency * self.params.ctrl_timestep / 0.01)):
                 state = self.dyn.successor(
                     state, VehicleCommands(acc=0, ddelta=(upperbound_ddelta + lowerbound_ddelta) / 2), 0.01
                 )
-            if state.y < self.lanewidth / 4:
+            if state.y < self.lanewidth / 8:
                 lowerbound_ddelta = (upperbound_ddelta + lowerbound_ddelta) / 2
             else:
                 upperbound_ddelta = (upperbound_ddelta + lowerbound_ddelta) / 2
@@ -412,7 +413,7 @@ class Pdm4arAgent(Agent):
 
         return -score, is_goal_state, inside_playground, heading_delta_over_threshold, is_outside_reach
 
-    def get_oponent_graph(self, sim_obs: SimObservations) -> tuple[List[WeightedGraph], List[dict]]:
+    def get_oponent_graph(self, sim_obs: SimObservations):
         """
         Generates the graphs for the opponent vehicle
         """
@@ -477,8 +478,8 @@ class Pdm4arAgent(Agent):
                     if depth < self.params.max_tree_dpeth:
                         recursive_adding(v, graph, depth_dict, depth + 1)
 
-        graphs = []
-        depth_dicts = []
+        graphs = {}
+        depth_dicts = {}
         for player_name, player_obs in sim_obs.players.items():
             if player_name == self.name:
                 continue
@@ -492,7 +493,7 @@ class Pdm4arAgent(Agent):
             )
             depth_dict = {}
             recursive_adding(init_node, graph, depth_dict=depth_dict, depth=1)
-            graphs.append(graph)
-            depth_dicts.append(depth_dict)
+            graphs[player_name] = graph
+            depth_dicts[player_name] = depth_dict
 
         return graphs, depth_dicts
