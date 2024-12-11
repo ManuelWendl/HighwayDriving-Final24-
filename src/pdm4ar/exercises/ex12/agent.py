@@ -197,7 +197,12 @@ class Pdm4arAgent(Agent):
             self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs)
             if self.path == []:
                 print("No path found")
-                self.last_next_state = self.graph.start.successors[int(self.params.n_velocity / 2 - 1)]
+                # Get the next state that has the same delta (ie ddelta = 0)
+                self.last_next_state = [
+                    successor
+                    for successor in self.graph.start.successors
+                    if np.isclose(successor.state.delta, self.graph.start.state.delta)
+                ][0]
                 return VehicleCommands(acc=0, ddelta=0)
             self.graph.draw_graph(self.lanes, self.path, opponent_graphs)
 
