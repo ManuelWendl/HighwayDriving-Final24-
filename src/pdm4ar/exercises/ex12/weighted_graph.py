@@ -78,7 +78,7 @@ class WeightedGraph:
 
     def draw_graph(self, lanes, trajectory=None, opponent_graphs=None):
         print("Drawing graph")
-        plt.figure(figsize=(100, 50))
+        plt.figure(figsize=(50, 20))
         for u, v in self.weights.keys():
             if v.data == 1:
                 plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "ro-", "LineWidth", 0.5)

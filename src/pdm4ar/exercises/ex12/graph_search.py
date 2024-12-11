@@ -15,7 +15,8 @@ Path = Optional[List[tree_node]]
 @dataclass(frozen=True)
 class GraphParams:
     length_dilation_for_collision = 0.05  # in percent
-    collision_rejection_threshold = 0.3
+    collision_rejection_threshold = 0.01  # in percent
+    collision_cost_weight = 1e9  # weight for collision cost
 
 
 @dataclass
@@ -41,6 +42,9 @@ class Astar(InformedGraphSearch):
         collision_probability = 0.0
         current_vehicle_shapely = get_vehicle_shapely(self.sg, current_state)
         for other_vehicle_depth_dict in other_vehicle_depth_dicts:
+            if current_timestep not in other_vehicle_depth_dict:
+                print(f"Current timestep {current_timestep} not in other vehicle depth dict")
+                break
             for other_vehicle_node in other_vehicle_depth_dict[current_timestep]:
                 other_vehicle_shapely = get_vehicle_shapely(
                     self.sg,
@@ -82,16 +86,14 @@ class Astar(InformedGraphSearch):
                     wn = C[s]
 
                 # Check for collision and don't push the node if it collides
-                if (
-                    self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth)
-                    < self.params.collision_rejection_threshold
-                ):
+                cp = self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth)
+                if cp < self.params.collision_rejection_threshold:
                     if snext not in H:
                         H.update({snext: self.heuristic(snext)})
 
                     if snext not in C or wn < C[snext]:
                         P.update({snext: s})
-                        C.update({snext: wn})
+                        C.update({snext: wn + self.params.collision_cost_weight * cp})
                         heapq.heappush(Q, (C[snext] + H[snext], snext))
 
         return []

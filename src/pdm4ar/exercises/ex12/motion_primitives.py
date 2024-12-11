@@ -50,13 +50,13 @@ class MotionPrimitivesGenerator(TrajGenerator):
 
     @time_function
     def generate(
-        self, x0: VehicleState, max_steering_angle: float, verbose: bool = False
+        self, x0: VehicleState, max_steering_angle_change: float, verbose: bool = False
     ) -> tuple[List[Trajectory], List[VehicleCommands]]:
         """
         :param x0: optionally if one wants to generate motion primitives only from a specific state
         :return:
         """
-        v_samples, steer_samples = self.generate_samples(x0=x0, max_steering_angle=max_steering_angle)
+        v_samples, steer_samples = self.generate_samples(x0=x0, max_steering_angle_change=max_steering_angle_change)
         motion_primitives: List[Trajectory] = []
         commands: List[VehicleCommands] = []
 
@@ -90,7 +90,7 @@ class MotionPrimitivesGenerator(TrajGenerator):
 
         return motion_primitives, commands
 
-    def generate_samples(self, x0, max_steering_angle: float) -> tuple[List, List]:
+    def generate_samples(self, x0, max_steering_angle_change: float) -> tuple[List, List]:
         if self.param.velocity == 1:
             v_samples = [x0.vx]
         else:
@@ -108,11 +108,11 @@ class MotionPrimitivesGenerator(TrajGenerator):
             steer_samples = np.linspace(
                 max(
                     x0.delta - self.vehicle_param.ddelta_max * float(self.param.dt),
-                    x0.delta - max_steering_angle,
+                    x0.delta - max_steering_angle_change * float(self.param.dt),
                 ),
                 min(
                     x0.delta + self.vehicle_param.ddelta_max * float(self.param.dt),
-                    x0.delta + max_steering_angle,
+                    x0.delta + max_steering_angle_change * float(self.param.dt),
                 ),
                 self.param.steering,
             )
