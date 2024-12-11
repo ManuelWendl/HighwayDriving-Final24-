@@ -49,7 +49,7 @@ class Pdm4arAgentParams:
     n_steering: int = 3
     n_discretization: int = 50
     delta_angle_threshold: float = np.pi / 4
-    max_tree_dpeth: int = 10
+    max_tree_dpeth: int = 12
     num_lanes_outside_reach: int = 1.5
 
     n_velocity_opponent: int = 3
@@ -123,9 +123,9 @@ class Pdm4arAgent(Agent):
         """
         state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
         time_count = 0
+        # TODO: TUNE HEURISTICALLY TO FIT THE LANDEWIDTH
         while state.y < self.lanewidth / 8:
-            time_count += 2
-            state = self.dyn.successor(state, VehicleCommands(acc=0, ddelta=self.sp.ddelta_max), 0.01)
+            time_count += 1
             state = self.dyn.successor(state, VehicleCommands(acc=0, ddelta=self.sp.ddelta_max), 0.01)
 
         horizon = time_count * 0.01
@@ -194,7 +194,7 @@ class Pdm4arAgent(Agent):
             if self.last_next_state is not None:
                 self.update_ego_tree(self.graph, self.last_next_state, sim_obs)
             # Generate the current path
-            self.path = self.gs.path(self.graph.start, depth_dicts)
+            self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs)
             if self.path == []:
                 print("No path found")
                 return VehicleCommands(acc=0, ddelta=0)

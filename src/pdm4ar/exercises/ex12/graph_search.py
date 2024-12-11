@@ -8,6 +8,7 @@ from .utils import get_vehicle_shapely
 from dg_commons.dynamics.bicycle_dynamic import VehicleState
 from dg_commons.sim.models.model_structures import TModelGeometry
 import shapely
+from dg_commons.sim import SimObservations
 
 Path = Optional[List[tree_node]]
 
@@ -15,7 +16,7 @@ Path = Optional[List[tree_node]]
 @dataclass(frozen=True)
 class GraphParams:
     length_dilation_for_collision = 0.05  # in percent
-    collision_rejection_threshold = 0.01  # in percent
+    collision_rejection_threshold = 0.1  # in percent
     collision_cost_weight = 1e9  # weight for collision cost
 
 
@@ -37,18 +38,22 @@ class Astar(InformedGraphSearch):
     params = GraphParams()
 
     def check_other_vehicle_collision(
-        self, current_state: VehicleState, other_vehicle_depth_dicts: list[dict], current_timestep: int
+        self,
+        current_state: VehicleState,
+        other_vehicle_depth_dicts: list[dict],
+        current_timestep: int,
+        sim_obs: SimObservations,
     ):
         collision_probability = 0.0
         current_vehicle_shapely = get_vehicle_shapely(self.sg, current_state)
-        for other_vehicle_depth_dict in other_vehicle_depth_dicts:
+        for other_vehicle_name, other_vehicle_depth_dict in other_vehicle_depth_dicts.items():
             if current_timestep not in other_vehicle_depth_dict:
                 print(f"Current timestep {current_timestep} not in other vehicle depth dict")
                 break
             for other_vehicle_node in other_vehicle_depth_dict[current_timestep]:
+                other_vehicle_sim_obs = sim_obs.players[other_vehicle_name]
                 other_vehicle_shapely = get_vehicle_shapely(
-                    self.sg,
-                    other_vehicle_node.state,
+                    self.sg, other_vehicle_node.state, own_vehicle=False, sim_obs=other_vehicle_sim_obs
                 )
                 if shapely.intersects(current_vehicle_shapely, other_vehicle_shapely):
                     collision_probability += other_vehicle_node.data
@@ -60,7 +65,7 @@ class Astar(InformedGraphSearch):
         # TODO: Define heuristic as distance from goal lane
         return 0
 
-    def path(self, start: tree_node, depth_dicts: list[dict]) -> Path:
+    def path(self, start: tree_node, depth_dicts: list[dict], sim_obs: SimObservations) -> Path:
         # todo
         Q = [(float(0), start)]
         P = {start: None}
@@ -86,7 +91,7 @@ class Astar(InformedGraphSearch):
                     wn = C[s]
 
                 # Check for collision and don't push the node if it collides
-                cp = self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth)
+                cp = self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth, sim_obs)
                 if cp < self.params.collision_rejection_threshold:
                     if snext not in H:
                         H.update({snext: self.heuristic(snext)})
