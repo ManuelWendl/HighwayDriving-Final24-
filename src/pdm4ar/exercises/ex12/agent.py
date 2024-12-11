@@ -102,8 +102,8 @@ class Pdm4arAgent(Agent):
 
         state_se2transform = SE2Transform([0, 0], 0)
         goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
-        lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
-        self.lanewidth = np.abs(np.abs(lane_pose.distance_from_right) - np.abs(lane_pose.distance_from_left)) * 2
+        # lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
+        self.lanewidth = self.goal.ref_lane.radius(0) * 2
 
         self.max_steering_angle_change = None
         # goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
@@ -123,7 +123,7 @@ class Pdm4arAgent(Agent):
         """
         state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
         time_count = 0
-        while state.y < self.lanewidth / 16:
+        while state.y < self.lanewidth / 4:
             time_count += 1
             state = self.dyn.successor(state, VehicleCommands(acc=0, ddelta=self.sp.ddelta_max), 0.01)
 
@@ -137,13 +137,13 @@ class Pdm4arAgent(Agent):
         lowerbound_ddelta = ddelta_max / 2
         upperbound_ddelta = ddelta_max
 
-        while np.abs(state.y - self.lanewidth / 16) >= 1e-3:
+        while np.abs(state.y - self.lanewidth / 4) >= 1e-3:
             state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
             for _ in range(int(self.params.ctrl_frequency * self.params.ctrl_timestep / 0.01)):
                 state = self.dyn.successor(
                     state, VehicleCommands(acc=0, ddelta=(upperbound_ddelta + lowerbound_ddelta) / 2), 0.01
                 )
-            if state.y < self.lanewidth / 16:
+            if state.y < self.lanewidth / 4:
                 lowerbound_ddelta = (upperbound_ddelta + lowerbound_ddelta) / 2
             else:
                 upperbound_ddelta = (upperbound_ddelta + lowerbound_ddelta) / 2
