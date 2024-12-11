@@ -197,6 +197,7 @@ class Pdm4arAgent(Agent):
             self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs)
             if self.path == []:
                 print("No path found")
+                self.last_next_state = self.graph.start.successors[int(self.params.n_velocity / 2 - 1)]
                 return VehicleCommands(acc=0, ddelta=0)
             self.graph.draw_graph(self.lanes, self.path, opponent_graphs)
 
@@ -320,7 +321,7 @@ class Pdm4arAgent(Agent):
         vehicle_shapely = get_vehicle_shapely(self.sg, future_state)
         # 0. Check whether future state is still within playground
         inside_playground = True
-        lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer / 2)
+        lanes_union = shapely.unary_union(self.lanes).buffer(self.road_boundaries_buffer)
         if not shapely.within(vehicle_shapely, lanes_union):
             return float("inf"), False, False, False, False
 
