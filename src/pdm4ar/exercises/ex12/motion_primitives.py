@@ -51,13 +51,13 @@ class MotionPrimitivesGenerator(TrajGenerator):
     @time_function
     def generate(
         self, x0: VehicleState, max_steering_angle_change: float, verbose: bool = False
-    ) -> tuple[List[Trajectory], List[VehicleCommands]]:
+    ) -> tuple[List[VehicleState], List[VehicleCommands]]:
         """
         :param x0: optionally if one wants to generate motion primitives only from a specific state
         :return:
         """
         v_samples, steer_samples = self.generate_samples(x0=x0, max_steering_angle_change=max_steering_angle_change)
-        motion_primitives: List[Trajectory] = []
+        motion_primitives: List[VehicleState] = []
         commands: List[VehicleCommands] = []
 
         v_start = x0.vx
@@ -71,24 +71,25 @@ class MotionPrimitivesGenerator(TrajGenerator):
             if not is_valid:
                 continue
             init_state = VehicleState(x=0, y=0, psi=0, vx=v_start, delta=sa_start) if x0 is None else x0
-            timestamps = [
-                Decimal(0),
-            ]
-            states = [
-                init_state,
-            ]
-            next_state = init_state
             cmds = VehicleCommands(acc=input_a, ddelta=input_sa_rate)
-            for n_step in range(1, self.param.n_steps + 1):
-                next_state = self.vehicle_dynamics(next_state, cmds, float(self.param.dt / self.param.n_steps))
-                timestamps.append(n_step * self.param.dt / self.param.n_steps)
-                states.append(next_state)
-            motion_primitives.append(Trajectory(timestamps=timestamps, values=states))
+            next_state = self.integrate_dynamics(init_state, cmds)
+            motion_primitives.append(next_state)
             commands.append(cmds)
         if verbose:
             logger.info(f"{type(self).__name__}:Found {len(motion_primitives)} feasible motion primitives")
 
         return motion_primitives, commands
+
+    def integrate_dynamics(self, x0: VehicleState, cmds: VehicleCommands) -> VehicleState:
+        """
+        :param x0: initial state
+        :param cmds: vehicle commands
+        :return: next state
+        """
+        next_state = x0
+        for _ in range(self.param.n_steps):
+            next_state = self.vehicle_dynamics(next_state, cmds, float(self.param.dt / self.param.n_steps))
+        return next_state
 
     def generate_samples(self, x0, max_steering_angle_change: float) -> tuple[List, List]:
         if self.param.velocity == 1:

@@ -245,19 +245,20 @@ class Pdm4arAgent(Agent):
             if u.data != 1:
                 trs, cmds = self.load_motion_primitives(u)
 
-                for tr, cmd in zip(deepcopy(trs), deepcopy(cmds)):
-                    for val in tr.values:
-                        x_temp = val.x * np.cos(u.state.psi) - val.y * np.sin(u.state.psi) + u.state.x
-                        val.y = val.x * np.sin(u.state.psi) + val.y * np.cos(u.state.psi) + u.state.y
-                        val.x = x_temp
-                        val.psi += u.state.psi
+                for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
+                    x_temp = val.x * np.cos(u.state.psi) - val.y * np.sin(u.state.psi) + u.state.x
+                    val.y = val.x * np.sin(u.state.psi) + val.y * np.cos(u.state.psi) + u.state.y
+                    val.x = x_temp
+                    val.psi += u.state.psi
 
                     cost, is_goal, inside_playground, heading_delta_over_threshold, is_outside_reach = (
-                        self.calculate_cost(tr.values[-1], cmd, depth * float(tr.timestamps[-1]), sim_obs)
+                        self.calculate_cost(
+                            val, cmd, depth * self.params.ctrl_frequency * self.params.ctrl_timestep, sim_obs
+                        )
                     )
 
                     if inside_playground and not heading_delta_over_threshold and not is_outside_reach:
-                        v = tree_node(tr.values[-1], depth=depth, data=float(is_goal))
+                        v = tree_node(val, depth=depth, data=float(is_goal))
                         graph.add_edge(u, v, cost, cmd)
                         if depth < self.params.max_tree_dpeth:
                             recursive_adding(v, graph, depth + 1)
@@ -285,20 +286,22 @@ class Pdm4arAgent(Agent):
                     add_successors(s)
                     s.depth -= 1
                 else:
+                    s.depth -= 1
                     trs, cmds = self.load_motion_primitives(s)
-                    for tr, cmd in zip(deepcopy(trs), deepcopy(cmds)):
-                        for val in tr.values:
-                            x_temp = val.x * np.cos(s.state.psi) - val.y * np.sin(s.state.psi) + s.state.x
-                            val.y = val.x * np.sin(s.state.psi) + val.y * np.cos(s.state.psi) + s.state.y
-                            val.x = x_temp
-                            val.psi += s.state.psi
+                    for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
+                        x_temp = val.x * np.cos(s.state.psi) - val.y * np.sin(s.state.psi) + s.state.x
+                        val.y = val.x * np.sin(s.state.psi) + val.y * np.cos(s.state.psi) + s.state.y
+                        val.x = x_temp
+                        val.psi += s.state.psi
 
                         cost, is_goal, inside_playground, heading_delta_over_threshold, is_outside_reach = (
-                            self.calculate_cost(tr.values[-1], cmd, s.depth * float(tr.timestamps[-1]), sim_obs)
+                            self.calculate_cost(
+                                val, cmd, s.depth * self.params.ctrl_frequency * self.params.ctrl_timestep, sim_obs
+                            )
                         )
 
                         if inside_playground and not heading_delta_over_threshold and not is_outside_reach:
-                            v = tree_node(tr.values[-1], depth=s.depth, data=float(is_goal))
+                            v = tree_node(val, depth=s.depth, data=float(is_goal))
                             graph.add_edge(s, v, cost, cmd)
 
         newstart = None
@@ -309,6 +312,7 @@ class Pdm4arAgent(Agent):
 
             if node == reached_node:
                 newstart = reached_node
+                newstart.depth -= 1
                 add_successors(newstart)
             else:
                 graph.remove_node(node)
