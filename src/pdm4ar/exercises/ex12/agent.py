@@ -55,8 +55,8 @@ class Pdm4arAgentParams:
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.001
-    probability_good_opponent: float = 0.3
-    max_acceleration_factor_opponent: float = 0.5
+    probability_good_opponent: float = 0.5
+    max_acceleration_factor_opponent: float = 2 / 3
 
 
 class Pdm4arAgent(Agent):
@@ -462,10 +462,16 @@ class Pdm4arAgent(Agent):
             else:
                 symmetric_steps = self.params.n_velocity_opponent // 2
 
+                # rel_pos_factor = 0
+
+                # ego_state = sim_obs.players["Ego"].state
+
                 velocities_lower = np.array(
                     [
                         u.state.vx
                         + self.sp.acc_limits[0]
+                        * self.params.max_acceleration_factor_opponent
+                        * rel_pos_factor
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)
@@ -477,7 +483,7 @@ class Pdm4arAgent(Agent):
                     [
                         u.state.vx
                         + self.sp.acc_limits[1]
-                        * self.max_acceleration_factor_opponent
+                        * self.params.max_acceleration_factor_opponent
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)
