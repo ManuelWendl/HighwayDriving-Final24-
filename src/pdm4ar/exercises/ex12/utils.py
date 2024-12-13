@@ -44,12 +44,12 @@ def get_vehicle_shapely(
         cog + R @ np.array([lf * (1 + length_dilation_for_collision), -w_half * (1 + width_dilation_for_collision)]).T
     )
     back_left = (
-        cog + R @ np.array([lr * (1 + length_dilation_for_collision), w_half * (1 + width_dilation_for_collision)]).T
+        cog + R @ np.array([-lr * (1 + length_dilation_for_collision), w_half * (1 + width_dilation_for_collision)]).T
     )
     back_right = (
-        cog + R @ np.array([lr * (1 + length_dilation_for_collision), -w_half * (1 + width_dilation_for_collision)]).T
+        cog + R @ np.array([-lr * (1 + length_dilation_for_collision), -w_half * (1 + width_dilation_for_collision)]).T
     )
 
-    vehicle_shapely = shapely.Polygon((tuple(front_left), tuple(front_right), tuple(back_left), tuple(back_right)))
+    vehicle_shapely = shapely.Polygon((tuple(front_left), tuple(front_right), tuple(back_right), tuple(back_left)))
 
     return vehicle_shapely

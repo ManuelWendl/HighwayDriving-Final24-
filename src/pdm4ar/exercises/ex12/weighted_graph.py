@@ -9,6 +9,8 @@ from dg_commons.eval.comfort import get_acc_rms
 from dg_commons.sim.models.vehicle import VehicleState, VehicleCommands
 from matplotlib.pylab import f
 import matplotlib.pyplot as plt
+import shapely
+from .utils import get_vehicle_shapely
 
 
 class tree_node:
@@ -76,7 +78,9 @@ class WeightedGraph:
             del self.weights[(u, v)]
             del self.cmds[(u, v)]
 
-    def draw_graph(self, lanes, trajectory=None, opponent_graphs=None):
+    def draw_graph(
+        self, lanes, trajectory=None, opponent_graphs=None, pose_on_init=None, current_players=None, sg=None
+    ):
         print("Drawing graph")
         plt.figure(figsize=(50, 20))
         for u, v in self.weights.keys():
@@ -89,11 +93,51 @@ class WeightedGraph:
         if trajectory:
             x_states = [node.state.x for node in trajectory]
             y_states = [node.state.y for node in trajectory]
+            # psi_states = [node.state.psi for node in trajectory]
             plt.plot(x_states, y_states, "bo-", "LineWidth", 0.5)
+            if sg:
+                for node in trajectory:
+                    vehicle_shapely = get_vehicle_shapely(sg, node.state)
+                    plt.plot(*vehicle_shapely.exterior.xy, color="orange", zorder=200, alpha=0.5, linewidth=0.2)
+                # for x_state, y_state in zip(x_states, y_states):
+                #     x_offset = x_state - current_players["Ego"].state.x
+                #     y_offset = y_state - current_players["Ego"].state.y
+                #     translated_shapely = shapely.affinity.translate(
+                #         current_players["Ego"].occupancy, xoff=x_offset, yoff=y_offset
+                #     )
+                #     plt.plot(
+                #         *translated_shapely.exterior.xy,
+                #         linewidth=0.1,
+                #         color="orange",
+                #         alpha=0.5,
+                #     )
         if opponent_graphs:
-            for graph in opponent_graphs.values():
+            for player_name, graph in opponent_graphs.items():
                 for u, v in graph.weights.keys():
-                    plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "go-", "LineWidth", 0.5)
+                    plt.plot([u.state.x, v.state.x], [u.state.y, v.state.y], "go-", linewidth=0.5)
+                    if current_players:
+                        x_offset = v.state.x - current_players[player_name].state.x
+                        y_offset = v.state.y - current_players[player_name].state.y
+                        translated_shapely = shapely.affinity.translate(
+                            current_players[player_name].occupancy, xoff=x_offset, yoff=y_offset
+                        )
+                        plt.plot(
+                            *translated_shapely.exterior.xy,
+                            linewidth=0.1,
+                            color="magenta",
+                            alpha=0.5,
+                        )
+
+        if pose_on_init:
+            plt.scatter(pose_on_init.x, pose_on_init.y, color="orange", s=20, zorder=100)
+
+        if current_players:
+            for player_name, player_data in current_players.items():
+                # Get the vehicle outline
+                if player_name == "Ego":
+                    plt.plot(*player_data.occupancy.exterior.xy, color="orange")
+                else:
+                    plt.plot(*player_data.occupancy.exterior.xy, color="magenta")
 
         plt.axis("equal")
         plt.savefig("graph.png")

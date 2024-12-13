@@ -116,6 +116,7 @@ class Pdm4arAgent(Agent):
         self.path = None  # Helper variable to store the path
         self.motion_primitives = {}  # Helper variable to store the motion primitives
         self.last_next_state = None  # Helper variable to store the last next state
+        self.pose_on_init = None
 
     def optimize_ctrlfreq_steeringangle(self, sim_obs: SimObservations):
         """
@@ -160,6 +161,10 @@ class Pdm4arAgent(Agent):
         :param sim_obs:
         :return:
         """
+
+        if self.pose_on_init == None:
+            self.pose_on_init = sim_obs.players["Ego"].state
+
         if self.max_steering_angle_change == None:
             self.optimize_ctrlfreq_steeringangle(sim_obs)
             self.mpg_params = MPGParam.from_vehicle_parameters(
@@ -188,7 +193,9 @@ class Pdm4arAgent(Agent):
         # START lane change planning
         if self.graph is None:
             self.generate_ego_graph(sim_obs)
-            self.graph.draw_graph(self.lanes)
+            self.graph.draw_graph(
+                self.lanes, pose_on_init=self.pose_on_init, current_players=sim_obs.players, sg=self.sg
+            )
             self.gs = Astar(self.graph, self.sg)
 
         if self.ctrl_num % self.params.ctrl_frequency == 0:
@@ -218,7 +225,7 @@ class Pdm4arAgent(Agent):
                         if np.isclose(successor.state.delta, self.graph.start.state.delta)
                     ][0]
                     return VehicleCommands(acc=0, ddelta=0)
-            self.graph.draw_graph(self.lanes, self.path, opponent_graphs)
+            self.graph.draw_graph(self.lanes, self.path, opponent_graphs, self.pose_on_init, sim_obs.players, self.sg)
 
         # Extract the commands from the path (MPC style)
         commands = self.graph.get_cmds(self.path[0], self.path[1])
@@ -365,7 +372,7 @@ class Pdm4arAgent(Agent):
 
         if (
             np.linalg.norm(
-                (np.array([future_state.x - self.graph.start.state.x, future_state.y - self.graph.start.state.y]))
+                (np.array([future_state.x - self.pose_on_init.x, future_state.y - self.pose_on_init.y]))
                 @ lane_normal_vector
             )
             > self.params.num_lanes_outside_reach * self.lanewidth
