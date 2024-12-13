@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import heapq
 
+from pdm4ar.exercises_def.ex09 import goal
+
 from .weighted_graph import WeightedGraph, tree_node
 from typing import Optional, List, Tuple
 from .utils import get_vehicle_shapely
@@ -9,15 +11,17 @@ from dg_commons.dynamics.bicycle_dynamic import VehicleState
 from dg_commons.sim.models.model_structures import TModelGeometry
 import shapely
 from dg_commons.sim import SimObservations
+from dg_commons.maps.lanes import DgLanelet
+from dg_commons import SE2Transform
 
 Path = Optional[List[tree_node]]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class GraphParams:
     length_dilation_for_collision = 0.05  # in percent
-    collision_rejection_threshold = 0.005  # in percent
-    collision_cost_weight = 1e8  # weight for collision cost
+    collision_rejection_threshold = 0.1  # in percent
+    collision_cost_weight = 1e4  # weight for collision cost
 
 
 @dataclass
@@ -34,8 +38,8 @@ class InformedGraphSearch(ABC):
 
 @dataclass
 class Astar(InformedGraphSearch):
-
     params = GraphParams()
+    goal_lanelet: Optional[DgLanelet] = None
 
     def check_other_vehicle_collision(
         self,
@@ -65,9 +69,17 @@ class Astar(InformedGraphSearch):
         # TODO: Define heuristic as distance from goal lane
         # Caclulate the distance from the goal lane
 
-        # Get the goal lane
+        # In case no goal lanelet is provided, return 0
+        if self.goal_lanelet is None:
+            return 0
 
-        return 0
+        # Get the lane pose of the current state
+        state_se2transform = SE2Transform(
+            [sim_obs.players["Ego"].state.x, sim_obs.players["Ego"].state.y], sim_obs.players["Ego"].state.psi
+        )
+        lane_pose = self.goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
+
+        return 5 * lane_pose.distance_from_center
 
     def path(self, start: tree_node, depth_dicts: list[dict], sim_obs: SimObservations, safe_depth=None) -> Path:
         # todo

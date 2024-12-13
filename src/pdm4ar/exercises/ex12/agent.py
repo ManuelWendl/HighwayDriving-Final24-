@@ -39,6 +39,7 @@ from dg_commons.controllers.pure_pursuit import PurePursuit, PurePursuitParam
 from dg_commons.sim.models.vehicle import VehicleModel
 
 from .utils import get_vehicle_shapely
+import time
 
 
 @dataclass(frozen=False)
@@ -49,12 +50,12 @@ class Pdm4arAgentParams:
     n_steering: int = 3
     n_discretization: int = 50
     delta_angle_threshold: float = np.pi / 4
-    max_tree_dpeth: int = 10
+    max_tree_dpeth: int = 8
     num_lanes_outside_reach: int = 1.5
 
-    n_velocity_opponent: int = 5
+    n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.001
-    probability_good_opponent: float = 0.2
+    probability_good_opponent: float = 0.3
 
 
 class Pdm4arAgent(Agent):
@@ -100,9 +101,7 @@ class Pdm4arAgent(Agent):
             [self.goal.ref_lane.get_control_points()[0].q.p]
         )[0][0]
 
-        state_se2transform = SE2Transform([0, 0], 0)
-        goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
-        # lane_pose = goal_lanelet.lane_pose_from_SE2Transform(state_se2transform)
+        self.goal_lanelet = DgLanelet(self.goal.ref_lane.control_points)
         self.lanewidth = self.goal.ref_lane.radius(0) * 2
 
         self.max_steering_angle_change = None
@@ -201,10 +200,11 @@ class Pdm4arAgent(Agent):
         if self.ctrl_num % self.params.ctrl_frequency == 0:
             # Generate the graph for the opponent vehicles
             opponent_graphs, depth_dicts = self.get_oponent_graph(sim_obs)
-            # TODO: Implement ego tree update
             if self.last_next_state is not None:
                 self.update_ego_tree(self.graph, self.last_next_state, sim_obs)
             # Generate the current path
+            if self.gs.goal_lanelet is None:
+                self.gs.goal_lanelet = self.goal_lanelet
             self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs)
 
             safe_depth = deepcopy(self.params.max_tree_dpeth) + 1
