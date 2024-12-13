@@ -52,9 +52,9 @@ class Pdm4arAgentParams:
     max_tree_dpeth: int = 10
     num_lanes_outside_reach: int = 1.5
 
-    n_velocity_opponent: int = 3
-    probability_threshold_opponent: float = 0.01
-    probability_good_opponent: float = 0.5
+    n_velocity_opponent: int = 5
+    probability_threshold_opponent: float = 0.001
+    probability_good_opponent: float = 0.2
 
 
 class Pdm4arAgent(Agent):
@@ -175,7 +175,11 @@ class Pdm4arAgent(Agent):
         else:
             # This is taken from L162 ex12/perf_metrics.py
             if desired_lane_reached(
-                self.lanelet_network, self.goal, sim_obs.players[self.name].state, pos_tol=0.8, heading_tol=0.08
+                self.lanelet_network,
+                self.goal,
+                sim_obs.players[self.name].state,
+                pos_tol=0.8,
+                heading_tol=0.1,  # allow larger heading difference
             ):
                 print("Goal lane reached")
                 self.goal_reached = True
@@ -195,15 +199,25 @@ class Pdm4arAgent(Agent):
                 self.update_ego_tree(self.graph, self.last_next_state, sim_obs)
             # Generate the current path
             self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs)
+
+            safe_depth = deepcopy(self.params.max_tree_dpeth) + 1
+            while self.path == [] and safe_depth > 1:
+                safe_depth -= 1
+                print("Search for safe path with depth:", safe_depth)
+                self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs, safe_depth=safe_depth)
+
             if self.path == []:
                 print("No path found")
                 # Get the next state that has the same delta (ie ddelta = 0)
-                self.last_next_state = [
-                    successor
-                    for successor in self.graph.start.successors
-                    if np.isclose(successor.state.delta, self.graph.start.state.delta)
-                ][0]
-                return VehicleCommands(acc=0, ddelta=0)
+                if self.graph.start.successors == []:
+                    return VehicleCommands(acc=0, ddelta=0)
+                else:
+                    self.last_next_state = [
+                        successor
+                        for successor in self.graph.start.successors
+                        if np.isclose(successor.state.delta, self.graph.start.state.delta)
+                    ][0]
+                    return VehicleCommands(acc=0, ddelta=0)
             self.graph.draw_graph(self.lanes, self.path, opponent_graphs)
 
         # Extract the commands from the path (MPC style)
@@ -283,8 +297,8 @@ class Pdm4arAgent(Agent):
         def add_successors(node):
             for s in node.successors:
                 if s.successors != []:
-                    add_successors(s)
                     s.depth -= 1
+                    add_successors(s)
                 else:
                     s.depth -= 1
                     trs, cmds = self.load_motion_primitives(s)
@@ -301,8 +315,10 @@ class Pdm4arAgent(Agent):
                         )
 
                         if inside_playground and not heading_delta_over_threshold and not is_outside_reach:
-                            v = tree_node(val, depth=s.depth, data=float(is_goal))
+                            v = tree_node(val, depth=s.depth + 1, data=float(is_goal))
                             graph.add_edge(s, v, cost, cmd)
+                            if s.depth + 1 < self.params.max_tree_dpeth:
+                                add_successors(v)
 
         newstart = None
 
@@ -358,14 +374,14 @@ class Pdm4arAgent(Agent):
         else:
             is_outside_reach = False
 
-        if np.abs(heading_delta) > np.pi / 4:
+        if np.abs(heading_delta) > np.pi / 3:
             heading_delta_over_threshold = True
             return float("inf"), False, False, True, False
 
         else:
             heading_delta_over_threshold = False
 
-        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.08):
+        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.1):
             is_goal_state = True
         else:
             is_goal_state = False
@@ -461,6 +477,7 @@ class Pdm4arAgent(Agent):
                 )
 
                 velocities = np.concatenate((velocities_lower, np.array([u.state.vx]), velocities_upper))
+                velocities = np.clip(velocities, 0, self.sp.vx_limits[1])
 
             d_x_normal = np.cos(u.state.psi)
             d_y_normal = np.sin(u.state.psi)

@@ -16,8 +16,8 @@ Path = Optional[List[tree_node]]
 @dataclass(frozen=True)
 class GraphParams:
     length_dilation_for_collision = 0.05  # in percent
-    collision_rejection_threshold = 0.05  # in percent
-    collision_cost_weight = 1e6  # weight for collision cost
+    collision_rejection_threshold = 0.005  # in percent
+    collision_cost_weight = 1e8  # weight for collision cost
 
 
 @dataclass
@@ -48,7 +48,7 @@ class Astar(InformedGraphSearch):
         current_vehicle_shapely = get_vehicle_shapely(self.sg, current_state)
         for other_vehicle_name, other_vehicle_depth_dict in other_vehicle_depth_dicts.items():
             if current_timestep not in other_vehicle_depth_dict:
-                print(f"Current timestep {current_timestep} not in other vehicle depth dict")
+                # print(f"Current timestep {current_timestep} not in other vehicle depth dict")
                 break
             for other_vehicle_node in other_vehicle_depth_dict[current_timestep]:
                 other_vehicle_sim_obs = sim_obs.players[other_vehicle_name]
@@ -59,23 +59,27 @@ class Astar(InformedGraphSearch):
                     collision_probability += other_vehicle_node.data
         return collision_probability
 
-    def heuristic(self, u: tree_node) -> float:
+    def heuristic(self, u: tree_node, sim_obs: SimObservations) -> float:
         # Increment this counter every time the heuristic is called, to judge the performance
         # of the algorithm
         # TODO: Define heuristic as distance from goal lane
+        # Caclulate the distance from the goal lane
+
+        # Get the goal lane
+
         return 0
 
-    def path(self, start: tree_node, depth_dicts: list[dict], sim_obs: SimObservations) -> Path:
+    def path(self, start: tree_node, depth_dicts: list[dict], sim_obs: SimObservations, safe_depth=None) -> Path:
         # todo
         Q = [(float(0), start)]
         P = {start: None}
         C = {start: 0}
-        H = {start: self.heuristic(start)}
+        H = {start: self.heuristic(start, sim_obs)}
 
         while Q:
             _, s = heapq.heappop(Q)
 
-            if s.data == 1:
+            if s.data == 1 or (safe_depth is not None and s.depth >= safe_depth):
                 path = []
                 current = s
                 while current is not None:
@@ -94,7 +98,7 @@ class Astar(InformedGraphSearch):
                 cp = self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth, sim_obs)
                 if cp < self.params.collision_rejection_threshold:
                     if snext not in H:
-                        H.update({snext: self.heuristic(snext)})
+                        H.update({snext: self.heuristic(snext, sim_obs)})
 
                     if snext not in C or wn < C[snext]:
                         P.update({snext: s})
