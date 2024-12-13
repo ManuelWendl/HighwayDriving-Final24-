@@ -55,11 +55,12 @@ class Astar(InformedGraphSearch):
                 # print(f"Current timestep {current_timestep} not in other vehicle depth dict")
                 break
             for other_vehicle_node in other_vehicle_depth_dict[current_timestep]:
-                other_vehicle_sim_obs = sim_obs.players[other_vehicle_name]
-                other_vehicle_shapely = get_vehicle_shapely(
-                    self.sg, other_vehicle_node.state, own_vehicle=False, sim_obs=other_vehicle_sim_obs
+                x_offset = other_vehicle_node.state.x - sim_obs.players[other_vehicle_name].state.x
+                y_offset = other_vehicle_node.state.y - sim_obs.players[other_vehicle_name].state.y
+                translated_other_vehicle_shapely = shapely.affinity.translate(
+                    sim_obs.players[other_vehicle_name].occupancy, xoff=x_offset, yoff=y_offset
                 )
-                if shapely.intersects(current_vehicle_shapely, other_vehicle_shapely):
+                if shapely.intersects(current_vehicle_shapely, translated_other_vehicle_shapely):
                     collision_probability += other_vehicle_node.data
         return collision_probability
 
