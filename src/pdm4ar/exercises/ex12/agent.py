@@ -56,6 +56,7 @@ class Pdm4arAgentParams:
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.001
     probability_good_opponent: float = 0.3
+    max_acceleration_factor_opponent: float = 0.5
 
 
 class Pdm4arAgent(Agent):
@@ -476,6 +477,7 @@ class Pdm4arAgent(Agent):
                     [
                         u.state.vx
                         + self.sp.acc_limits[1]
+                        * self.max_acceleration_factor_opponent
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)
