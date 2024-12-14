@@ -1,8 +1,10 @@
+import array
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import product
 from typing import List, Callable, Set
 
+from matplotlib.pylab import f
 import numpy as np
 
 from dg_commons import logger, Timestamp
@@ -50,13 +52,15 @@ class MotionPrimitivesGenerator(TrajGenerator):
 
     @time_function
     def generate(
-        self, x0: VehicleState, max_steering_angle_change: float, verbose: bool = False
+        self, x0: VehicleState, max_steering_angle_change: float, depth: int
     ) -> tuple[List[VehicleState], List[VehicleCommands]]:
         """
         :param x0: optionally if one wants to generate motion primitives only from a specific state
         :return:
         """
-        v_samples, steer_samples = self.generate_samples(x0=x0, max_steering_angle_change=max_steering_angle_change)
+        v_samples, steer_samples = self.generate_samples(
+            x0=x0, max_steering_angle_change=max_steering_angle_change, depth=depth
+        )
         motion_primitives: List[VehicleState] = []
         commands: List[VehicleCommands] = []
 
@@ -64,8 +68,6 @@ class MotionPrimitivesGenerator(TrajGenerator):
         sa_start = x0.delta
 
         n = len(v_samples) * len(steer_samples)
-        if verbose:
-            logger.debug(f"Attempting to generate {n} motion primitives")
         for v_end, sa_end in product(v_samples, steer_samples):
             is_valid, input_a, input_sa_rate = self.check_input_constraints(v_start, v_end, sa_start, sa_end)
             if not is_valid:
@@ -75,8 +77,6 @@ class MotionPrimitivesGenerator(TrajGenerator):
             next_state = self.integrate_dynamics(init_state, cmds)
             motion_primitives.append(next_state)
             commands.append(cmds)
-        if verbose:
-            logger.info(f"{type(self).__name__}:Found {len(motion_primitives)} feasible motion primitives")
 
         return motion_primitives, commands
 
@@ -91,18 +91,29 @@ class MotionPrimitivesGenerator(TrajGenerator):
             next_state = self.vehicle_dynamics(next_state, cmds, float(self.param.dt / self.param.n_steps))
         return next_state
 
-    def generate_samples(self, x0, max_steering_angle_change: float) -> tuple[List, List]:
-        if self.param.velocity == 1:
-            v_samples = [x0.vx]
+    def generate_samples(self, x0, max_steering_angle_change: float, depth) -> tuple[List, List]:
+        if depth % 2 == 0:
+            if self.param.velocity == 1:
+                v_samples = [x0.vx]
+            else:
+                n_symmetric = self.param.velocity // 2
+                v_lower = np.array(
+                    [
+                        x0.vx + i * self.vehicle_param.acc_limits[0] * 2 / 3 * float(self.param.dt)
+                        for i in range(1, n_symmetric + 1)
+                    ]
+                )
+                v_upper = np.array(
+                    [
+                        x0.vx + i * self.vehicle_param.acc_limits[1] * 2 / 3 * float(self.param.dt)
+                        for i in range(1, n_symmetric + 1)
+                    ]
+                )
+                v_samples = np.concatenate((v_lower, np.array([x0.vx]), v_upper))
+                v_samples = np.clip(v_samples, self.vehicle_param.vx_limits[0], self.vehicle_param.vx_limits[1])
         else:
-            v_samples = np.linspace(
-                max(x0.vx + self.vehicle_param.acc_limits[0] * 2 / 3 * float(self.param.dt), 5),
-                min(
-                    x0.vx + self.vehicle_param.acc_limits[1] * 2 / 3 * float(self.param.dt),
-                    self.vehicle_param.vx_limits[1],
-                ),
-                self.param.velocity,
-            )
+            v_samples = [x0.vx]
+
         if self.param.steering == 1:
             steer_samples = [x0.delta]
         else:

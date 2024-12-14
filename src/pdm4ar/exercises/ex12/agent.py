@@ -46,17 +46,17 @@ import time
 class Pdm4arAgentParams:
     ctrl_timestep: float = 0.1
     ctrl_frequency: float = 4
-    n_velocity: int = 1
+    n_velocity: int = 3
     n_steering: int = 3
-    n_discretization: int = 50
+    n_discretization: int = 30
     delta_angle_threshold: float = np.pi / 4
-    max_tree_dpeth: int = 8
+    max_tree_dpeth: int = 6
     num_lanes_outside_reach: int = 1.5
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.001
-    probability_good_opponent: float = 0.5
-    max_acceleration_factor_opponent: float = 2 / 3
+    probability_good_opponent: float = 0.4
+    max_acceleration_factor_opponent: float = 1 / 6
 
 
 class Pdm4arAgent(Agent):
@@ -237,13 +237,13 @@ class Pdm4arAgent(Agent):
         self.ctrl_num += 1
         return VehicleCommands(acc=acc, ddelta=ddelta)
 
-    def load_motion_primitives(self, u):
+    def load_motion_primitives(self, u, depth):
         """
         Load motion primitive if precomputed otherwise compute and store
         """
         if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives:
             helper_state = VehicleState(x=0, y=0, psi=0, vx=u.state.vx, delta=u.state.delta)
-            trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle_change)
+            trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle_change, depth)
             self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))] = (
                 trs,
                 cmds,
@@ -265,7 +265,7 @@ class Pdm4arAgent(Agent):
             Recursively add motion primitives to the graph
             """
             if u.data != 1:
-                trs, cmds = self.load_motion_primitives(u)
+                trs, cmds = self.load_motion_primitives(u, depth)
 
                 for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
                     x_temp = val.x * np.cos(u.state.psi) - val.y * np.sin(u.state.psi) + u.state.x
@@ -309,7 +309,7 @@ class Pdm4arAgent(Agent):
                     add_successors(s)
                 else:
                     s.depth -= 1
-                    trs, cmds = self.load_motion_primitives(s)
+                    trs, cmds = self.load_motion_primitives(s, s.depth)
                     for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
                         x_temp = val.x * np.cos(s.state.psi) - val.y * np.sin(s.state.psi) + s.state.x
                         val.y = val.x * np.sin(s.state.psi) + val.y * np.cos(s.state.psi) + s.state.y
@@ -462,9 +462,17 @@ class Pdm4arAgent(Agent):
             else:
                 symmetric_steps = self.params.n_velocity_opponent // 2
 
-                # rel_pos_factor = 0
+                rel_pos_factor = 0
+                ego_state = sim_obs.players["Ego"].state
 
-                # ego_state = sim_obs.players["Ego"].state
+                ego_direction = np.array([np.cos(ego_state.psi), np.sin(ego_state.psi)])
+                difference_vector = np.array([u.state.x - ego_state.x, u.state.y - ego_state.y])
+                direction = np.sign(np.dot(ego_direction, difference_vector))
+
+                if direction == 1:
+                    rel_pos_factor = 3
+                elif direction == -1:
+                    rel_pos_factor = 1 / 3
 
                 velocities_lower = np.array(
                     [
@@ -484,6 +492,7 @@ class Pdm4arAgent(Agent):
                         u.state.vx
                         + self.sp.acc_limits[1]
                         * self.params.max_acceleration_factor_opponent
+                        / rel_pos_factor
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)
