@@ -141,3 +141,5 @@ class WeightedGraph:
 
         plt.axis("equal")
         plt.savefig("graph.png")
+        plt.close()
+        print("Graph Plotted")

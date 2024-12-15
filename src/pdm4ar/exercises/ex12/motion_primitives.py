@@ -92,20 +92,20 @@ class MotionPrimitivesGenerator(TrajGenerator):
         return next_state
 
     def generate_samples(self, x0, max_steering_angle_change: float, depth) -> tuple[List, List]:
-        if depth % 2 == 0:
+        if depth == 0:
             if self.param.velocity == 1:
                 v_samples = [x0.vx]
             else:
                 n_symmetric = self.param.velocity // 2
                 v_lower = np.array(
                     [
-                        x0.vx + i * self.vehicle_param.acc_limits[0] * 2 / 3 * float(self.param.dt)
+                        x0.vx + i * self.vehicle_param.acc_limits[0] * 1 / 3 * float(self.param.dt)
                         for i in range(1, n_symmetric + 1)
                     ]
                 )
                 v_upper = np.array(
                     [
-                        x0.vx + i * self.vehicle_param.acc_limits[1] * 2 / 3 * float(self.param.dt)
+                        x0.vx + i * self.vehicle_param.acc_limits[1] * 1 / 3 * float(self.param.dt)
                         for i in range(1, n_symmetric + 1)
                     ]
                 )

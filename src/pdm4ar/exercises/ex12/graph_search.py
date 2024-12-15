@@ -20,8 +20,9 @@ Path = Optional[List[tree_node]]
 @dataclass(frozen=False)
 class GraphParams:
     length_dilation_for_collision = 0.05  # in percent
-    collision_rejection_threshold = 0.2  # in percent
-    collision_cost_weight = 1e2  # weight for collision cost
+    collision_rejection_threshold = 0.33  # in percent
+    collision_cost_weight = 1e1  # weight for collision cost
+    use_heuristic = True  # whether to use heuristic or not
 
 
 @dataclass
@@ -71,7 +72,7 @@ class Astar(InformedGraphSearch):
         # Caclulate the distance from the goal lane
 
         # In case no goal lanelet is provided, return 0
-        if self.goal_lanelet is None:
+        if self.goal_lanelet is None or self.params.use_heuristic is False:
             return 0
 
         # Get the lane pose of the current state

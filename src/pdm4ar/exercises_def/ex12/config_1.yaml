@@ -11,14 +11,14 @@ testcases:
       names: [P1, P2]
     description: "scenario1"
   
-#  -
-#    scenario: "USA_US101-10_3_T-1"
-#    max_sim_time: 10.0
-#    ego:
-#      original_name: P26
-#      goal_lane_id: 40
-#    others:
-#      names: [P8, P9, P18, P22]
-#    description: "scenario2"
+  -
+    scenario: "USA_US101-10_3_T-1"
+    max_sim_time: 10.0
+    ego:
+      original_name: P26
+      goal_lane_id: 40
+    others:
+      names: [P8, P9, P18, P22]
+    description: "scenario2"
 
 seed: 98

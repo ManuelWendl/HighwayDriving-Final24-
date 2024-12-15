@@ -1,4 +1,6 @@
 from hmac import new
+from json import load
+from operator import add
 from typing import List
 from calendar import c
 from math import e
@@ -39,24 +41,23 @@ from dg_commons.controllers.pure_pursuit import PurePursuit, PurePursuitParam
 from dg_commons.sim.models.vehicle import VehicleModel
 
 from .utils import get_vehicle_shapely
-import time
 
 
 @dataclass(frozen=False)
 class Pdm4arAgentParams:
     ctrl_timestep: float = 0.1
     ctrl_frequency: float = 4
-    n_velocity: int = 3
+    n_velocity: int = 1
     n_steering: int = 3
-    n_discretization: int = 30
-    delta_angle_threshold: float = np.pi / 4
+    n_discretization: int = 50
+    delta_angle_threshold: float = np.pi / 2
     max_tree_dpeth: int = 6
-    num_lanes_outside_reach: int = 1.5
+    num_lanes_outside_reach: int = 2
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.001
-    probability_good_opponent: float = 0.4
-    max_acceleration_factor_opponent: float = 1 / 6
+    probability_good_opponent: float = 1 / 3
+    max_acceleration_factor_opponent: float = 1 / 3
 
 
 class Pdm4arAgent(Agent):
@@ -237,16 +238,17 @@ class Pdm4arAgent(Agent):
         self.ctrl_num += 1
         return VehicleCommands(acc=acc, ddelta=ddelta)
 
-    def load_motion_primitives(self, u, depth):
+    def load_motion_primitives(self, u):
         """
         Load motion primitive if precomputed otherwise compute and store
         """
-        if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives:
+        if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives or u.depth == 0:
             helper_state = VehicleState(x=0, y=0, psi=0, vx=u.state.vx, delta=u.state.delta)
-            trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle_change, depth)
+            trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle_change, u.depth)
+            # Only store the motion primitives with zero acceleration
             self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))] = (
-                trs,
-                cmds,
+                [trs for trs, cmd in zip(trs, cmds) if cmd.acc == 0],
+                [cmd for trs, cmd in zip(trs, cmds) if cmd.acc == 0],
             )
         else:
             trs, cmds = self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))]
@@ -265,7 +267,7 @@ class Pdm4arAgent(Agent):
             Recursively add motion primitives to the graph
             """
             if u.data != 1:
-                trs, cmds = self.load_motion_primitives(u, depth)
+                trs, cmds = self.load_motion_primitives(u)
 
                 for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
                     x_temp = val.x * np.cos(u.state.psi) - val.y * np.sin(u.state.psi) + u.state.x
@@ -309,7 +311,7 @@ class Pdm4arAgent(Agent):
                     add_successors(s)
                 else:
                     s.depth -= 1
-                    trs, cmds = self.load_motion_primitives(s, s.depth)
+                    trs, cmds = self.load_motion_primitives(s)
                     for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
                         x_temp = val.x * np.cos(s.state.psi) - val.y * np.sin(s.state.psi) + s.state.x
                         val.y = val.x * np.sin(s.state.psi) + val.y * np.cos(s.state.psi) + s.state.y
@@ -337,7 +339,44 @@ class Pdm4arAgent(Agent):
             if node == reached_node:
                 newstart = reached_node
                 newstart.depth -= 1
-                add_successors(newstart)
+                if self.params.n_velocity > 1:
+                    # Added to avoid not adding new velocity branches to the graph at depth=0
+                    trs, cmds = self.load_motion_primitives(newstart)
+                    for val, cmd in zip(deepcopy(trs), deepcopy(cmds)):
+                        if cmd.acc == 0:
+                            continue
+                        else:
+                            x_temp = (
+                                val.x * np.cos(newstart.state.psi)
+                                - val.y * np.sin(newstart.state.psi)
+                                + newstart.state.x
+                            )
+                            val.y = (
+                                val.x * np.sin(newstart.state.psi)
+                                + val.y * np.cos(newstart.state.psi)
+                                + newstart.state.y
+                            )
+                            val.x = x_temp
+                            val.psi += newstart.state.psi
+
+                            cost, is_goal, inside_playground, heading_delta_over_threshold, is_outside_reach = (
+                                self.calculate_cost(
+                                    val,
+                                    cmd,
+                                    newstart.depth * self.params.ctrl_frequency * self.params.ctrl_timestep,
+                                    sim_obs,
+                                )
+                            )
+
+                            if inside_playground and not heading_delta_over_threshold and not is_outside_reach:
+                                v = tree_node(val, depth=newstart.depth, data=float(is_goal))
+                                graph.add_edge(newstart, v, cost, cmd)
+                                add_successors(v)
+
+                        for s in newstart.successors:
+                            add_successors(s)
+                else:
+                    add_successors(newstart)
             else:
                 graph.remove_node(node)
 
@@ -464,15 +503,31 @@ class Pdm4arAgent(Agent):
 
                 rel_pos_factor = 0
                 ego_state = sim_obs.players["Ego"].state
+                ego_x = (
+                    ego_state.x
+                    + np.cos(ego_state.psi)
+                    * ego_state.vx
+                    * self.params.ctrl_timestep
+                    * self.params.ctrl_frequency
+                    * depth
+                )
+                ego_y = (
+                    ego_state.y
+                    + np.sin(ego_state.psi)
+                    * ego_state.vx
+                    * self.params.ctrl_timestep
+                    * self.params.ctrl_frequency
+                    * depth
+                )
 
                 ego_direction = np.array([np.cos(ego_state.psi), np.sin(ego_state.psi)])
-                difference_vector = np.array([u.state.x - ego_state.x, u.state.y - ego_state.y])
+                difference_vector = np.array([u.state.x - ego_x, u.state.y - ego_y])
                 direction = np.sign(np.dot(ego_direction, difference_vector))
 
                 if direction == 1:
-                    rel_pos_factor = 3
+                    rel_pos_factor = 2
                 elif direction == -1:
-                    rel_pos_factor = 1 / 3
+                    rel_pos_factor = 1 / 2
 
                 velocities_lower = np.array(
                     [
@@ -492,7 +547,6 @@ class Pdm4arAgent(Agent):
                         u.state.vx
                         + self.sp.acc_limits[1]
                         * self.params.max_acceleration_factor_opponent
-                        / rel_pos_factor
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)

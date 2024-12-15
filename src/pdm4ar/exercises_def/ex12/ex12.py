@@ -85,8 +85,8 @@ def load_config_ex12(file_path: Path) -> Mapping:
 def get_exercise12():
     config_dir = Path(__file__).parent
     scenarios_dir = str(config_dir)
-    # config_list = ["config_1.yaml", "config_2.yaml", "config_3.yaml"]
-    config_list = ["config_3.yaml"]
+    config_list = ["config_1.yaml", "config_2.yaml", "config_3.yaml"]
+    # config_list = ["config_3.yaml"]
     test_values: List[SimContext] = []
     for config_name in config_list:
         config_dict = load_config_ex12(config_dir / config_name)
