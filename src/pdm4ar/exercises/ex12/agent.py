@@ -58,14 +58,14 @@ class Pdm4arAgentParams:
     num_lanes_outside_reach: int = 2
     avg_velocity = True
     goal_velocity = None
-    min_velocity = 5.1
+    min_velocity = 4.85
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.01
     probability_good_opponent: float = 1 / 3
-    max_acceleration_factor_opponent: float = 1 / 2
+    max_acceleration_factor_opponent: float = 1 / 3
 
-    verbose = False
+    verbose = True
 
 
 class Pdm4arAgent(Agent):
@@ -577,9 +577,9 @@ class Pdm4arAgent(Agent):
                 direction = np.sign(np.dot(ego_direction, difference_vector))
 
                 if direction == -1:
-                    rel_pos_factor = 2
+                    rel_pos_factor = 3
                 elif direction == 1:
-                    rel_pos_factor = 1 / 2
+                    rel_pos_factor = 1 / 3
 
                 velocities_lower = np.array(
                     [
