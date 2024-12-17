@@ -52,14 +52,14 @@ class MotionPrimitivesGenerator(TrajGenerator):
 
     @time_function
     def generate(
-        self, x0: VehicleState, max_steering_angle_change: float, depth: int
+        self, x0: VehicleState, max_steering_angle_change: float, depth: int, goal_velocity: float
     ) -> tuple[List[VehicleState], List[VehicleCommands]]:
         """
         :param x0: optionally if one wants to generate motion primitives only from a specific state
         :return:
         """
         v_samples, steer_samples = self.generate_samples(
-            x0=x0, max_steering_angle_change=max_steering_angle_change, depth=depth
+            x0=x0, max_steering_angle_change=max_steering_angle_change, depth=depth, goal_velocity=goal_velocity
         )
         motion_primitives: List[VehicleState] = []
         commands: List[VehicleCommands] = []
@@ -91,28 +91,38 @@ class MotionPrimitivesGenerator(TrajGenerator):
             next_state = self.vehicle_dynamics(next_state, cmds, float(self.param.dt / self.param.n_steps))
         return next_state
 
-    def generate_samples(self, x0, max_steering_angle_change: float, depth) -> tuple[List, List]:
+    def generate_samples(self, x0, max_steering_angle_change: float, depth, goal_velocity: float) -> tuple[List, List]:
+        end_velocity = min(
+            max(
+                goal_velocity,
+                x0.vx + self.vehicle_param.acc_limits[0] * 2 / 3 * float(self.param.dt),
+                self.vehicle_param.vx_limits[0],
+            ),
+            self.vehicle_param.vx_limits[1],
+            x0.vx + self.vehicle_param.acc_limits[1] * 2 / 3 * float(self.param.dt),
+        )
+
         if depth == 0:
             if self.param.velocity == 1:
-                v_samples = [x0.vx]
+                v_samples = [end_velocity]
             else:
                 n_symmetric = self.param.velocity // 2
                 v_lower = np.array(
                     [
-                        x0.vx + i * self.vehicle_param.acc_limits[0] * 1 / 3 * float(self.param.dt)
+                        end_velocity + i * self.vehicle_param.acc_limits[0] * 1 / 3 * float(self.param.dt)
                         for i in range(1, n_symmetric + 1)
                     ]
                 )
                 v_upper = np.array(
                     [
-                        x0.vx + i * self.vehicle_param.acc_limits[1] * 1 / 3 * float(self.param.dt)
+                        end_velocity + i * self.vehicle_param.acc_limits[1] * 1 / 3 * float(self.param.dt)
                         for i in range(1, n_symmetric + 1)
                     ]
                 )
-                v_samples = np.concatenate((v_lower, np.array([x0.vx]), v_upper))
+                v_samples = np.concatenate((v_lower, np.array([end_velocity]), v_upper))
                 v_samples = np.clip(v_samples, self.vehicle_param.vx_limits[0], self.vehicle_param.vx_limits[1])
         else:
-            v_samples = [x0.vx]
+            v_samples = [end_velocity]
 
         if self.param.steering == 1:
             steer_samples = [x0.delta]

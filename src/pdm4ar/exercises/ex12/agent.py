@@ -22,6 +22,8 @@ from dg_commons.dynamics.bicycle_dynamic import BicycleDynamics, VehicleState
 
 from typing import TypeVar
 
+from pdm4ar.exercises_def.ex09 import goal
+
 
 from .motion_primitives import MotionPrimitivesGenerator, MPGParam
 from .weighted_graph import WeightedGraph, tree_node
@@ -47,17 +49,20 @@ from .utils import get_vehicle_shapely
 class Pdm4arAgentParams:
     ctrl_timestep: float = 0.1
     ctrl_frequency: float = 4
-    n_velocity: int = 1
+    n_velocity: int = 1  # keep this 1 for now (avoid dense trees and long computation time)
     n_steering: int = 3
     n_discretization: int = 50
-    delta_angle_threshold: float = np.pi / 2
+    delta_angle_threshold: float = np.pi / 4
     max_tree_dpeth: int = 6
-    num_lanes_outside_reach: int = 2
+    num_lanes_outside_reach: int = 200
+    avg_velocity = True
+    goal_velocity = None
+    min_velocity = 3
 
     n_velocity_opponent: int = 3
-    probability_threshold_opponent: float = 0.001
-    probability_good_opponent: float = 1 / 3
-    max_acceleration_factor_opponent: float = 1 / 3
+    probability_threshold_opponent: float = 0.01
+    probability_good_opponent: float = 1 / 2
+    max_acceleration_factor_opponent: float = 1 / 2
 
 
 class Pdm4arAgent(Agent):
@@ -119,14 +124,19 @@ class Pdm4arAgent(Agent):
         self.last_next_state = None  # Helper variable to store the last next state
         self.pose_on_init = None
 
-    def optimize_ctrlfreq_steeringangle(self, sim_obs: SimObservations):
+    def optimize_ctrlfreq_steeringangle(self, sim_obs: SimObservations, goal_velocity: float):
         """
         This method is used to optimize the control frequency and the steering angle
         """
-        state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
+        state = VehicleState(x=0, y=0, psi=0, vx=goal_velocity, delta=0)
         time_count = 0
         # TODO: TUNE HEURISTICALLY TO FIT THE LANDEWIDTH
-        while state.y < self.lanewidth / 8:
+        if goal_velocity <= 5.5:
+            factor = 14  # Factor for low speeds to get an additional motion primitive during lane change to force the other vehicles to slow down.
+        else:
+            factor = 8
+
+        while state.y < self.lanewidth / factor:
             time_count += 1
             state = self.dyn.successor(state, VehicleCommands(acc=0, ddelta=self.sp.ddelta_max), 0.01)
 
@@ -140,13 +150,13 @@ class Pdm4arAgent(Agent):
         lowerbound_ddelta = ddelta_max / 2
         upperbound_ddelta = ddelta_max
 
-        while np.abs(state.y - self.lanewidth / 8) >= 1e-3:
-            state = VehicleState(x=0, y=0, psi=0, vx=sim_obs.players["Ego"].state.vx, delta=0)
+        while np.abs(state.y - self.lanewidth / factor) >= 1e-3:
+            state = VehicleState(x=0, y=0, psi=0, vx=goal_velocity, delta=0)
             for _ in range(int(self.params.ctrl_frequency * self.params.ctrl_timestep / 0.01)):
                 state = self.dyn.successor(
                     state, VehicleCommands(acc=0, ddelta=(upperbound_ddelta + lowerbound_ddelta) / 2), 0.01
                 )
-            if state.y < self.lanewidth / 8:
+            if state.y < self.lanewidth / factor:
                 lowerbound_ddelta = (upperbound_ddelta + lowerbound_ddelta) / 2
             else:
                 upperbound_ddelta = (upperbound_ddelta + lowerbound_ddelta) / 2
@@ -167,7 +177,30 @@ class Pdm4arAgent(Agent):
             self.pose_on_init = sim_obs.players["Ego"].state
 
         if self.max_steering_angle_change == None:
-            self.optimize_ctrlfreq_steeringangle(sim_obs)
+            if self.params.avg_velocity:
+                # Take average velocity of all vehicles
+                self.goal_velocity = 0
+                counter = 0
+                for player_name, player in sim_obs.players.items():
+                    if player_name != "Ego":
+                        state_se2transform = SE2Transform([player.state.x, player.state.y], player.state.psi)
+                        lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
+                        lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
+                        if lane_pose.distance_from_center <= 1:
+                            self.goal_velocity += player.state.vx
+                            counter += 1
+
+                if counter != 0:
+                    self.goal_velocity /= counter
+                else:
+                    self.goal_velocity = sim_obs.players["Ego"].state.vx
+            else:
+                self.goal_velocity = sim_obs.players["Ego"].state.vx
+
+            # Set the minimal velocity by hand
+            self.goal_velocity = np.clip(self.goal_velocity, self.params.min_velocity, self.sp.vx_limits[1])
+
+            self.optimize_ctrlfreq_steeringangle(sim_obs, self.goal_velocity)
             self.mpg_params = MPGParam.from_vehicle_parameters(
                 dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequency),
                 n_steps=self.params.n_discretization,
@@ -185,7 +218,7 @@ class Pdm4arAgent(Agent):
                 self.goal,
                 sim_obs.players[self.name].state,
                 pos_tol=0.8,
-                heading_tol=0.1,  # allow larger heading difference
+                heading_tol=0.2,  # allow larger heading difference
             ):
                 print("Goal lane reached")
                 self.goal_reached = True
@@ -242,16 +275,28 @@ class Pdm4arAgent(Agent):
         """
         Load motion primitive if precomputed otherwise compute and store
         """
-        if (u.state.vx, np.round(u.state.delta, 1)) not in self.motion_primitives or u.depth == 0:
+        if (np.round(u.state.vx, 3), np.round(u.state.delta, 1)) not in self.motion_primitives or np.abs(
+            u.state.vx - self.goal_velocity
+        ) >= 1e-3:
             helper_state = VehicleState(x=0, y=0, psi=0, vx=u.state.vx, delta=u.state.delta)
-            trs, cmds = self.mpg.generate(helper_state, self.max_steering_angle_change, u.depth)
+            if np.abs(u.state.vx - self.goal_velocity) >= 1e-3:
+                trs, cmds = self.mpg.generate(
+                    helper_state, self.max_steering_angle_change, u.depth, goal_velocity=self.goal_velocity
+                )
+            else:
+                trs, cmds = self.mpg.generate(
+                    helper_state, self.max_steering_angle_change, u.depth, goal_velocity=u.state.vx
+                )
             # Only store the motion primitives with zero acceleration
-            self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))] = (
-                [trs for trs, cmd in zip(trs, cmds) if cmd.acc == 0],
-                [cmd for trs, cmd in zip(trs, cmds) if cmd.acc == 0],
-            )
+            trs_acc_zero = [trs for trs, cmd in zip(trs, cmds) if cmd.acc == 0]
+            cmds_acc_zero = [cmd for trs, cmd in zip(trs, cmds) if cmd.acc == 0]
+            if trs_acc_zero != []:
+                self.motion_primitives[(np.round(u.state.vx, 3), np.round(u.state.delta, 1))] = (
+                    trs_acc_zero,
+                    cmds_acc_zero,
+                )
         else:
-            trs, cmds = self.motion_primitives[(u.state.vx, np.round(u.state.delta, 1))]
+            trs, cmds = self.motion_primitives[(np.round(u.state.vx, 3), np.round(u.state.delta, 1))]
 
         return trs, cmds
 
@@ -428,7 +473,7 @@ class Pdm4arAgent(Agent):
         else:
             heading_delta_over_threshold = False
 
-        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.1):
+        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.2):
             is_goal_state = True
         else:
             is_goal_state = False
@@ -524,9 +569,9 @@ class Pdm4arAgent(Agent):
                 difference_vector = np.array([u.state.x - ego_x, u.state.y - ego_y])
                 direction = np.sign(np.dot(ego_direction, difference_vector))
 
-                if direction == 1:
+                if direction == -1:
                     rel_pos_factor = 2
-                elif direction == -1:
+                elif direction == 1:
                     rel_pos_factor = 1 / 2
 
                 velocities_lower = np.array(
@@ -547,6 +592,7 @@ class Pdm4arAgent(Agent):
                         u.state.vx
                         + self.sp.acc_limits[1]
                         * self.params.max_acceleration_factor_opponent
+                        / rel_pos_factor
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)

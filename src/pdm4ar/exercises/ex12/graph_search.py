@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import heapq
 
+from numpy import shape
+
 from pdm4ar.exercises_def.ex09 import goal
 
 from .weighted_graph import WeightedGraph, tree_node
@@ -20,8 +22,9 @@ Path = Optional[List[tree_node]]
 @dataclass(frozen=False)
 class GraphParams:
     length_dilation_for_collision = 0.05  # in percent
-    collision_rejection_threshold = 0.33  # in percent
-    collision_cost_weight = 1e1  # weight for collision cost
+    collision_rejection_threshold = 0.002  # in percent
+    collision_cost_weight = 1e9  # weight for collision cost
+    collision_buffer = 0.3  # buffer for collision
     use_heuristic = True  # whether to use heuristic or not
 
 
@@ -50,8 +53,17 @@ class Astar(InformedGraphSearch):
         sim_obs: SimObservations,
     ):
         collision_probability = 0.0
-        current_vehicle_shapely = get_vehicle_shapely(self.sg, current_state)
+        current_vehicle_shapely = sim_obs.players["Ego"].occupancy
+        rotated_current_vehicle_shapely = shapely.affinity.rotate(
+            current_vehicle_shapely, current_state.psi - sim_obs.players["Ego"].state.psi, origin="centroid"
+        )
+        translated_current_vehicle_shapely = shapely.affinity.translate(
+            rotated_current_vehicle_shapely,
+            xoff=current_state.x - sim_obs.players["Ego"].state.x,
+            yoff=current_state.y - sim_obs.players["Ego"].state.y,
+        )
         for other_vehicle_name, other_vehicle_depth_dict in other_vehicle_depth_dicts.items():
+            vehicle_probability = 0.0
             if current_timestep not in other_vehicle_depth_dict:
                 # print(f"Current timestep {current_timestep} not in other vehicle depth dict")
                 break
@@ -61,8 +73,13 @@ class Astar(InformedGraphSearch):
                 translated_other_vehicle_shapely = shapely.affinity.translate(
                     sim_obs.players[other_vehicle_name].occupancy, xoff=x_offset, yoff=y_offset
                 )
-                if shapely.intersects(current_vehicle_shapely, translated_other_vehicle_shapely):
-                    collision_probability += other_vehicle_node.data
+                if shapely.intersects(
+                    translated_current_vehicle_shapely,
+                    translated_other_vehicle_shapely.buffer(self.params.collision_buffer),
+                ):
+                    vehicle_probability += other_vehicle_node.data
+
+            collision_probability = max(collision_probability, vehicle_probability)
         return collision_probability
 
     def heuristic(self, u: tree_node, sim_obs: SimObservations) -> float:
