@@ -1,6 +1,7 @@
 from hmac import new
 from json import load
 from operator import add
+from tabnanny import verbose
 from typing import List
 from calendar import c
 from math import e
@@ -57,12 +58,14 @@ class Pdm4arAgentParams:
     num_lanes_outside_reach: int = 2
     avg_velocity = True
     goal_velocity = None
-    min_velocity = 5.001
+    min_velocity = 5.1
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.01
     probability_good_opponent: float = 1 / 3
     max_acceleration_factor_opponent: float = 1 / 2
+
+    verbose = False
 
 
 class Pdm4arAgent(Agent):
@@ -132,7 +135,7 @@ class Pdm4arAgent(Agent):
         time_count = 0
         # TODO: TUNE HEURISTICALLY TO FIT THE LANDEWIDTH
         if goal_velocity <= 5.5:
-            factor = 18  # Factor for low speeds to get an additional motion primitive during lane change to force the other vehicles to slow down.
+            factor = 25  # Factor for low speeds to get an additional motion primitive during lane change to force the other vehicles to slow down.
         else:
             factor = 8
 
@@ -227,9 +230,10 @@ class Pdm4arAgent(Agent):
         # START lane change planning
         if self.graph is None:
             self.generate_ego_graph(sim_obs)
-            self.graph.draw_graph(
-                self.lanes, pose_on_init=self.pose_on_init, current_players=sim_obs.players, sg=self.sg
-            )
+            if self.params.verbose:
+                self.graph.draw_graph(
+                    self.lanes, pose_on_init=self.pose_on_init, current_players=sim_obs.players, sg=self.sg
+                )
             self.gs = Astar(self.graph, self.sg)
 
         if self.ctrl_num % self.params.ctrl_frequency == 0:
@@ -260,7 +264,10 @@ class Pdm4arAgent(Agent):
                         if np.isclose(successor.state.delta, self.graph.start.state.delta)
                     ][0]
                     return VehicleCommands(acc=0, ddelta=0)
-            self.graph.draw_graph(self.lanes, self.path, opponent_graphs, self.pose_on_init, sim_obs.players, self.sg)
+            if self.params.verbose:
+                self.graph.draw_graph(
+                    self.lanes, self.path, opponent_graphs, self.pose_on_init, sim_obs.players, self.sg
+                )
 
         # Extract the commands from the path (MPC style)
         commands = self.graph.get_cmds(self.path[0], self.path[1])
