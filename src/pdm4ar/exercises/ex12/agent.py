@@ -54,14 +54,14 @@ class Pdm4arAgentParams:
     n_discretization: int = 50
     delta_angle_threshold: float = np.pi / 4
     max_tree_dpeth: int = 6
-    num_lanes_outside_reach: int = 200
+    num_lanes_outside_reach: int = 2
     avg_velocity = True
     goal_velocity = None
-    min_velocity = 3
+    min_velocity = 5.001
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.01
-    probability_good_opponent: float = 1 / 2
+    probability_good_opponent: float = 1 / 3
     max_acceleration_factor_opponent: float = 1 / 2
 
 
@@ -132,7 +132,7 @@ class Pdm4arAgent(Agent):
         time_count = 0
         # TODO: TUNE HEURISTICALLY TO FIT THE LANDEWIDTH
         if goal_velocity <= 5.5:
-            factor = 14  # Factor for low speeds to get an additional motion primitive during lane change to force the other vehicles to slow down.
+            factor = 18  # Factor for low speeds to get an additional motion primitive during lane change to force the other vehicles to slow down.
         else:
             factor = 8
 
