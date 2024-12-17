@@ -21,7 +21,7 @@ Path = Optional[List[tree_node]]
 
 @dataclass(frozen=False)
 class GraphParams:
-    collision_rejection_threshold = 0.25  # in percent
+    collision_rejection_threshold = 0.05  # in percent
     collision_cost_weight = 1e9  # weight for collision cost
     collision_buffer = 0.2  # buffer for collision
     use_heuristic = True  # whether to use heuristic or not
