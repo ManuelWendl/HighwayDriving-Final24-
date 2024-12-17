@@ -79,7 +79,11 @@ def goal_lane_commands(self, sim_obs: SimObservations) -> VehicleCommands:
     print(f"Time to collision: {time_to_collision}")
 
     if time_to_collision < 1:
-        # Decelerate, TODO: more smoothly
-        acc = self.sp.acc_limits[0]
+        # Decelerate TODO: More smoothly
+        acc = self.sp.acc_limits[0] * 1
+    elif time_to_collision < 5:
+        acc = self.sp.acc_limits[0] * 1 / 2
+    elif time_to_collision < 10:
+        acc = self.sp.acc_limits[0] * 1 / 4
 
     return VehicleCommands(acc=acc, ddelta=ddelta)
