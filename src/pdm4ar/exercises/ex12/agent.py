@@ -1,3 +1,4 @@
+from asyncio import FastChildWatcher
 from hmac import new
 from json import load
 from operator import add
@@ -56,16 +57,16 @@ class Pdm4arAgentParams:
     delta_angle_threshold: float = np.pi / 4
     max_tree_dpeth: int = 6
     num_lanes_outside_reach: int = 2
-    avg_velocity = True
+    use_velocity_variation = True
     goal_velocity = None
-    min_velocity = 4.85
+    min_velocity = 0.7
 
     n_velocity_opponent: int = 3
     probability_threshold_opponent: float = 0.01
     probability_good_opponent: float = 1 / 3
     max_acceleration_factor_opponent: float = 1 / 3
 
-    verbose = True
+    verbose = False
 
 
 class Pdm4arAgent(Agent):
@@ -127,6 +128,9 @@ class Pdm4arAgent(Agent):
         self.last_next_state = None  # Helper variable to store the last next state
         self.pose_on_init = None
 
+        self.in_merge = False  # Helper boolean to indicate if in merge opertion
+        self.last_min_v = (0, None)  # Helper variable to store the last minimal velocity and corresponding player
+
     def optimize_ctrlfreq_steeringangle(self, sim_obs: SimObservations, goal_velocity: float):
         """
         This method is used to optimize the control frequency and the steering angle
@@ -166,6 +170,109 @@ class Pdm4arAgent(Agent):
 
         self.max_steering_angle_change = (upperbound_ddelta + lowerbound_ddelta) / 2
 
+    def get_nearest_goal_lane_velocity(self, sim_obs: SimObservations):
+        """
+        Returns the velocity, relative position (in front/ in back) and distance of closest car on goal lane
+        """
+        min_dist = float("inf")
+        min_velocity = 0
+        min_direction = 0
+        min_player_name = None
+        for player_name, player in sim_obs.players.items():
+            if player_name != "Ego":
+                state_se2transform = SE2Transform([player.state.x, player.state.y], player.state.psi)
+                lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
+                lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
+                if lane_pose.distance_from_center <= self.lanewidth * 2 / 3:
+                    # Calculate the distance to ego:
+                    d_vec = np.array(
+                        [
+                            player.state.x - sim_obs.players["Ego"].state.x,
+                            player.state.y - sim_obs.players["Ego"].state.y,
+                        ]
+                    )
+
+                    distance_to_ego = np.linalg.norm(d_vec)
+                    norm_ego = np.array(
+                        [np.cos(sim_obs.players["Ego"].state.psi), np.sin(sim_obs.players["Ego"].state.psi)]
+                    )
+                    direction = np.sign(np.dot(d_vec, norm_ego))
+                    if distance_to_ego < min_dist:
+                        min_velocity = player.state.vx
+                        min_direction = direction
+                        min_dist = distance_to_ego
+                        min_player_name = player_name
+
+        return (
+            min_velocity,
+            min_direction,
+            min_dist,
+            min_player_name,
+        )
+
+    def get_avg_goal_lane_velocity(self, sim_obs: SimObservations):
+        """
+        Returns the average velocity on the goal lane
+        """
+        avg_velocity = 0
+        counter = 0
+        for player_name, player in sim_obs.players.items():
+            if player_name != "Ego":
+                state_se2transform = SE2Transform([player.state.x, player.state.y], player.state.psi)
+                lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
+                lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
+                if lane_pose.distance_from_center <= self.lanewidth * 2 / 3:
+                    avg_velocity += player.state.vx
+                    counter += 1
+
+        if counter != 0:
+            avg_velocity /= counter
+        else:
+            avg_velocity = sim_obs.players["Ego"].state.vx
+
+        return avg_velocity
+
+    def set_mpg_params(self, sim_obs: SimObservations):
+        self.optimize_ctrlfreq_steeringangle(sim_obs, self.goal_velocity)
+        self.mpg_params = MPGParam.from_vehicle_parameters(
+            dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequency),
+            n_steps=self.params.n_discretization,
+            n_vel=self.params.n_velocity,
+            n_steer=self.params.n_steering,
+        )
+        self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor, self.sp)
+
+    def klebe_am_arsch_vom_vordermann(self, sim_obs: SimObservations):
+        dir_ego = np.array([np.cos(sim_obs.players["Ego"].state.psi), np.sin(sim_obs.players["Ego"].state.psi)])
+        min_dist = float("inf")
+        min_vel = 0
+        for player_name, player in sim_obs.players.items():
+            if player_name != "Ego":
+                d_vec = np.array(
+                    [
+                        player.state.x - sim_obs.players["Ego"].state.x,
+                        player.state.y - sim_obs.players["Ego"].state.y,
+                    ]
+                )
+                if np.dot(d_vec, dir_ego) > 0 and np.linalg.norm(d_vec) < min_dist:
+                    min_dist = np.linalg.norm(d_vec)
+                    min_vel = player.state.vx
+
+        return min_vel
+
+    def get_bool_lane_merge(self, avg_v, last_min_v, min_v, min_dist, min_player_name):
+        """
+        Returns a boolean wether to start the lane merge:
+        Watch that function only returns true in dense case!
+        """
+        if avg_v <= 4 and self.last_min_v[1] == min_player_name:
+            vel_req = min_v <= 2 and last_min_v[0] - min_v >= 0.25
+            dist_req = min_dist <= self.lanewidth * 2
+
+            return vel_req and dist_req
+        else:
+            return False
+
     def get_commands(self, sim_obs: SimObservations) -> VehicleCommands:
         """This method is called by the simulator every dt_commands seconds (0.1s by default).
         Do not modify the signature of this method.
@@ -176,42 +283,28 @@ class Pdm4arAgent(Agent):
         :return:
         """
 
-        if self.pose_on_init == None:
+        # START On Initial get_commands call
+        if self.pose_on_init is None:
             self.pose_on_init = sim_obs.players["Ego"].state
 
-        if self.max_steering_angle_change == None:
-            if self.params.avg_velocity:
-                # Take average velocity of all vehicles
-                self.goal_velocity = 0
-                counter = 0
-                for player_name, player in sim_obs.players.items():
-                    if player_name != "Ego":
-                        state_se2transform = SE2Transform([player.state.x, player.state.y], player.state.psi)
-                        lanelet_new = DgLanelet(self.goal.ref_lane.control_points)
-                        lane_pose = lanelet_new.lane_pose_from_SE2Transform(state_se2transform)
-                        if lane_pose.distance_from_center <= 1:
-                            self.goal_velocity += player.state.vx
-                            counter += 1
-
-                if counter != 0:
-                    self.goal_velocity /= counter
-                else:
-                    self.goal_velocity = sim_obs.players["Ego"].state.vx
+        if self.max_steering_angle_change is None:
+            if self.params.use_velocity_variation:
+                self.goal_velocity = max(4.75, self.get_avg_goal_lane_velocity(sim_obs))
             else:
                 self.goal_velocity = sim_obs.players["Ego"].state.vx
 
-            # Set the minimal velocity by hand
             self.goal_velocity = np.clip(self.goal_velocity, self.params.min_velocity, self.sp.vx_limits[1])
+            self.set_mpg_params(sim_obs)
 
-            self.optimize_ctrlfreq_steeringangle(sim_obs, self.goal_velocity)
-            self.mpg_params = MPGParam.from_vehicle_parameters(
-                dt=Decimal(self.params.ctrl_timestep * self.params.ctrl_frequency),
-                n_steps=self.params.n_discretization,
-                n_vel=self.params.n_velocity,
-                n_steer=self.params.n_steering,
-            )
-            self.mpg = MotionPrimitivesGenerator(self.mpg_params, self.dyn.successor, self.sp)
+        if self.graph is None:
+            self.generate_ego_graph(sim_obs)
+            if self.params.verbose:
+                self.graph.draw_graph(
+                    self.lanes, pose_on_init=self.pose_on_init, current_players=sim_obs.players, sg=self.sg
+                )
+            self.gs = Astar(self.graph, self.sg)
 
+        # START If goal lane is reached
         if self.goal_reached:
             return goal_lane_commands(self, sim_obs)
         else:
@@ -221,32 +314,70 @@ class Pdm4arAgent(Agent):
                 self.goal,
                 sim_obs.players[self.name].state,
                 pos_tol=0.8,
-                heading_tol=0.2,  # allow larger heading difference
+                heading_tol=0.1,  # allow larger heading difference
             ):
                 print("Goal lane reached")
                 self.goal_reached = True
                 return goal_lane_commands(self, sim_obs)
 
         # START lane change planning
-        if self.graph is None:
-            self.generate_ego_graph(sim_obs)
-            if self.params.verbose:
-                self.graph.draw_graph(
-                    self.lanes, pose_on_init=self.pose_on_init, current_players=sim_obs.players, sg=self.sg
-                )
-            self.gs = Astar(self.graph, self.sg)
-
         if self.ctrl_num % self.params.ctrl_frequency == 0:
+
             # Generate the graph for the opponent vehicles
             opponent_graphs, depth_dicts = self.get_oponent_graph(sim_obs)
-            if self.last_next_state is not None:
+
+            # Get the average and the minimal velocity
+            avg_velocity = self.get_avg_goal_lane_velocity(sim_obs)
+            if avg_velocity <= 4:
+                # Add additional buffer for dense lane merging
+                self.gs.params.collision_buffer = 0.2
+
+            min_velocity, min_dir, min_dist, min_player_name = self.get_nearest_goal_lane_velocity(sim_obs)
+            if (
+                self.get_bool_lane_merge(avg_velocity, self.last_min_v, min_velocity, min_dist, min_player_name)
+                and not self.in_merge
+            ):
+                print("===Start lane merge===")
+                self.goal_velocity = max(
+                    min_velocity - 0.0 * min_dir,
+                    sim_obs.players["Ego"].state.vx
+                    + self.sp.acc_limits[0] * self.params.ctrl_frequency * self.params.ctrl_timestep,
+                )
+                self.goal_velocity = np.clip(self.goal_velocity, self.params.min_velocity, self.sp.vx_limits[1])
+                self.set_mpg_params(sim_obs)
+                self.generate_ego_graph(sim_obs)
+                self.gs = Astar(self.graph, self.sg)
+                self.path = []
+                self.in_merge = True
+                self.ctrl_num = 0
+
+            elif self.in_merge:
+                vel_car_in_front = self.klebe_am_arsch_vom_vordermann(sim_obs)
+                self.goal_velocity = np.clip(vel_car_in_front, self.params.min_velocity, self.sp.vx_limits[1])
+                self.set_mpg_params(sim_obs)
+                self.generate_ego_graph(sim_obs)
+                self.gs = Astar(self.graph, self.sg)
+                self.path = []
+                self.in_merge = True
+                self.ctrl_num = 0
+
+            elif self.last_next_state is not None:
                 self.update_ego_tree(self.graph, self.last_next_state, sim_obs)
+            # Set last minimal velocity
+            self.last_min_v = (min_velocity, min_player_name)
+
             # Generate the current path
             if self.gs.goal_lanelet is None:
                 self.gs.goal_lanelet = self.goal_lanelet
-            self.path = self.gs.path(self.graph.start, depth_dicts, sim_obs)
+            self.path = self.gs.path(
+                self.graph.start,
+                depth_dicts,
+                sim_obs,
+                safe_depth=self.params.max_tree_dpeth + 1,
+                in_merge=self.in_merge,
+            )
 
-            safe_depth = deepcopy(self.params.max_tree_dpeth) + 1
+            safe_depth = deepcopy(self.params.max_tree_dpeth)
             while self.path == [] and safe_depth > 1:
                 safe_depth -= 1
                 print("Search for safe path with depth:", safe_depth)
@@ -480,7 +611,7 @@ class Pdm4arAgent(Agent):
         else:
             heading_delta_over_threshold = False
 
-        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.2):
+        if desired_lane_reached(self.lanelet_network, self.goal, future_state, pos_tol=0.8, heading_tol=0.1):
             is_goal_state = True
         else:
             is_goal_state = False
@@ -496,7 +627,7 @@ class Pdm4arAgent(Agent):
         # 2. lane changing time
         lane_changing_penalty = time / 5.0
         lane_changing_penalty = np.clip(lane_changing_penalty, 0.0, 1.0)
-        score -= 100.0 * lane_changing_penalty
+        score -= 500.0 * lane_changing_penalty
 
         # 3. time to collision
         time_to_collision = np.inf
@@ -576,17 +707,27 @@ class Pdm4arAgent(Agent):
                 difference_vector = np.array([u.state.x - ego_x, u.state.y - ego_y])
                 direction = np.sign(np.dot(ego_direction, difference_vector))
 
-                if direction == -1:
-                    rel_pos_factor = 3
-                elif direction == 1:
-                    rel_pos_factor = 1 / 3
+                if direction == 1:
+                    if self.in_merge:
+                        rel_pos_factor_upper = 3
+                        rel_pos_factor_lower = 0
+                    else:
+                        rel_pos_factor_upper = 3
+                        rel_pos_factor_lower = 1 / 3
+                elif direction == -1:
+                    if self.in_merge:
+                        rel_pos_factor_upper = 0
+                        rel_pos_factor_lower = 3
+                    else:
+                        rel_pos_factor_upper = 1 / 3
+                        rel_pos_factor_lower = 3
 
                 velocities_lower = np.array(
                     [
                         u.state.vx
                         + self.sp.acc_limits[0]
                         * self.params.max_acceleration_factor_opponent
-                        * rel_pos_factor
+                        * rel_pos_factor_lower
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)
@@ -599,7 +740,7 @@ class Pdm4arAgent(Agent):
                         u.state.vx
                         + self.sp.acc_limits[1]
                         * self.params.max_acceleration_factor_opponent
-                        / rel_pos_factor
+                        * rel_pos_factor_upper
                         / symmetric_steps
                         * step
                         * float(self.params.ctrl_timestep * self.params.ctrl_frequency)

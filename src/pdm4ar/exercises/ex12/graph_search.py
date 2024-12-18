@@ -21,9 +21,9 @@ Path = Optional[List[tree_node]]
 
 @dataclass(frozen=False)
 class GraphParams:
-    collision_rejection_threshold = 0.25  # in percent
+    collision_rejection_threshold = 0.15  # in percent
     collision_cost_weight = 1e9  # weight for collision cost
-    collision_buffer = 0.2  # buffer for collision
+    collision_buffer = 0.0  # buffer for collision
     use_heuristic = True  # whether to use heuristic or not
 
 
@@ -99,7 +99,9 @@ class Astar(InformedGraphSearch):
 
         return 5 * lane_pose.distance_from_center
 
-    def path(self, start: tree_node, depth_dicts: list[dict], sim_obs: SimObservations, safe_depth=None) -> Path:
+    def path(
+        self, start: tree_node, depth_dicts: list[dict], sim_obs: SimObservations, safe_depth=None, in_merge=False
+    ) -> Path:
         # todo
         Q = [(float(0), start)]
         P = {start: None}
@@ -126,7 +128,7 @@ class Astar(InformedGraphSearch):
 
                 # Check for collision and don't push the node if it collides
                 cp = self.check_other_vehicle_collision(snext.state, depth_dicts, snext.depth, sim_obs)
-                if cp < self.params.collision_rejection_threshold:
+                if cp < self.params.collision_rejection_threshold or in_merge:
                     if snext not in H:
                         H.update({snext: self.heuristic(snext, sim_obs)})
 
